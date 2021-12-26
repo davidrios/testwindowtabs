@@ -47,7 +47,7 @@ pub struct ComponentRegistry {
 }
 
 impl ComponentRegistry {
-    pub fn new() -> ComponentRegistry {
+    fn new() -> ComponentRegistry {
         ComponentRegistry {
             registry: Mutex::new(HashMap::with_capacity(3)),
         }
