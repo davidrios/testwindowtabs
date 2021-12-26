@@ -5,17 +5,18 @@ mod wutils;
 use std::io;
 use std::ptr::{null, null_mut};
 
-use button::{BaseButton, ToggleButton};
 use winapi::shared::minwindef::*;
 use winapi::shared::windef::*;
 use winapi::um::libloaderapi::GetModuleHandleW;
 use winapi::um::wincon::{AttachConsole, ATTACH_PARENT_PROCESS};
 use winapi::um::wingdi::*;
 use winapi::um::winuser::*;
-use wutils::Component;
 
-use crate::button::{Button, Colors as ButtonColors, State as ButtonState};
+use crate::button::{
+    BaseButton, Button, Colors as ButtonColors, State as ButtonState, ToggleButton,
+};
 use crate::tab_bar::TabBar;
+use crate::wutils::Component;
 
 const WINDOW_CLASS_NAME: &str = "testwindowtabs.Window";
 const WINDOW_TITLE: &str = "the testwindowtabs application";
