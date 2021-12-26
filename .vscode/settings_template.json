@@ -1,0 +1,10 @@
+{
+  "[rust]": {
+    "editor.formatOnSave": true,
+  },
+  "rust-analyzer.assist.importEnforceGranularity": true,
+  "rust-analyzer.assist.importGranularity": "module",
+  "rust-analyzer.rustfmt.overrideCommand": [
+    "C:\\Users\\david\\.rustup\\toolchains\\nightly-x86_64-pc-windows-msvc\\bin\\rustfmt.exe"
+  ],
+}
