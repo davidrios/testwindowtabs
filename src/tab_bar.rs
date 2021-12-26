@@ -7,7 +7,7 @@ use winapi::shared::windef::*;
 use winapi::um::wingdi::*;
 use winapi::um::winuser::*;
 
-use crate::button::Button;
+use crate::button::{BaseButton, Button, ToggleButton};
 use crate::wutils::{Component, Error};
 use crate::{wnd_proc_gen, wpanic_ifeq, wpanic_ifnull, wutils};
 
@@ -21,37 +21,39 @@ pub struct TabBar {
     add_button: Option<Box<Button>>,
     tab_count: u32,
     tab_order: Vec<u32>,
-    tab_buttons: HashMap<u32, Box<Button>>,
+    tab_buttons: HashMap<u32, Box<ToggleButton>>,
 }
 
 impl Component for TabBar {
     fn hwnd(&self) -> HWND {
         self.hwnd
     }
-}
 
-impl TabBar {
-    pub fn register_class(h_inst: HINSTANCE) -> Result<(), io::Error> {
-        let class = WNDCLASSW {
-            style: CS_HREDRAW | CS_VREDRAW | CS_OWNDC,
-            lpfnWndProc: Some(wnd_proc),
-            cbClsExtra: 0,
-            cbWndExtra: 0,
-            hInstance: h_inst,
-            hIcon: null_mut(),
-            hCursor: unsafe { LoadCursorW(null_mut(), IDC_ARROW) },
-            hbrBackground: null_mut(),
-            lpszMenuName: null(),
-            lpszClassName: wutils::wide_string(CLASS_NAME).as_ptr(),
-        };
+    fn register_class(h_inst: HINSTANCE) -> Result<(), Error> {
+        if let Ok(_) = wutils::component_registry().set_registered(h_inst as isize, CLASS_NAME) {
+            let class = WNDCLASSW {
+                style: CS_HREDRAW | CS_VREDRAW | CS_OWNDC,
+                lpfnWndProc: Some(wnd_proc),
+                cbClsExtra: 0,
+                cbWndExtra: 0,
+                hInstance: h_inst,
+                hIcon: null_mut(),
+                hCursor: unsafe { LoadCursorW(null_mut(), IDC_ARROW) },
+                hbrBackground: null_mut(),
+                lpszMenuName: null(),
+                lpszClassName: wutils::wide_string(CLASS_NAME).as_ptr(),
+            };
 
-        if unsafe { RegisterClassW(&class) } == 0 {
-            return Err(io::Error::last_os_error());
+            if unsafe { RegisterClassW(&class) } == 0 {
+                return Err(Error::WindowsInternal(io::Error::last_os_error()));
+            }
         }
 
         Ok(())
     }
+}
 
+impl TabBar {
     pub fn new(
         x: i32,
         y: i32,
@@ -60,6 +62,8 @@ impl TabBar {
         parent_hwnd: HWND,
         h_inst: HINSTANCE,
     ) -> Result<Box<Self>, Error> {
+        Self::register_class(h_inst)?;
+
         let me = Box::new(Self {
             hwnd: null_mut(),
             h_inst,
@@ -108,7 +112,7 @@ impl TabBar {
         self.add_button = Some(add_button);
     }
 
-    fn reposition_button(&self, button_ref: Option<&Box<Button>>, rect: RECT) {
+    fn reposition_component<T: Component>(&self, button_ref: Option<&Box<T>>, rect: RECT) {
         if let Some(button) = button_ref {
             wpanic_ifeq!(
                 MoveWindow(
@@ -124,7 +128,7 @@ impl TabBar {
         }
     }
 
-    fn reposition_buttons(&self) {
+    fn reposition_components(&self) {
         let my_rect = self.get_client_rect();
 
         let mut btn_rect = my_rect;
@@ -133,13 +137,13 @@ impl TabBar {
         btn_rect.right = btn_rect.left + 10;
 
         for idx in &self.tab_order {
-            self.reposition_button(self.tab_buttons.get(idx), btn_rect);
+            self.reposition_component(self.tab_buttons.get(idx), btn_rect);
             btn_rect.left += 12;
             btn_rect.right = btn_rect.left + 10;
         }
 
         btn_rect.right += 30;
-        self.reposition_button(self.add_button.as_ref(), btn_rect);
+        self.reposition_component(self.add_button.as_ref(), btn_rect);
     }
 
     fn handle_message(&mut self, message: UINT, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -151,7 +155,7 @@ impl TabBar {
                 dbg!(wparam);
             }
             WM_SIZE => {
-                self.reposition_buttons();
+                self.reposition_components();
             }
             WM_PAINT => {
                 let mut ps = PAINTSTRUCT::default();
@@ -165,7 +169,7 @@ impl TabBar {
             }
             WM_CREATE => {
                 self.on_created();
-                self.reposition_buttons();
+                self.reposition_components();
             }
             _ => {}
         }
@@ -176,7 +180,7 @@ impl TabBar {
         let hwnd = self.hwnd;
         let idx = self.tab_count;
         self.tab_count += 1;
-        let mut button = Button::new(self.hwnd, self.h_inst, 0, 0, 0, 0, None).unwrap();
+        let mut button = ToggleButton::new(self.hwnd, self.h_inst, 0, 0, 0, 0, None, None).unwrap();
 
         button.on_click(Box::new(move || {
             wpanic_ifeq!(PostMessageW(hwnd, UM_CLICKTAB, idx as usize, 0), FALSE);
@@ -184,7 +188,7 @@ impl TabBar {
 
         self.tab_order.push(idx);
         self.tab_buttons.insert(idx, button);
-        self.reposition_buttons();
+        self.reposition_components();
     }
 }
 

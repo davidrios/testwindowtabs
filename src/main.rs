@@ -5,6 +5,7 @@ mod wutils;
 use std::io;
 use std::ptr::{null, null_mut};
 
+use button::{BaseButton, ToggleButton};
 use winapi::shared::minwindef::*;
 use winapi::shared::windef::*;
 use winapi::um::libloaderapi::GetModuleHandleW;
@@ -36,23 +37,29 @@ pub struct Window {
 
 impl Window {
     pub fn register_class(h_inst: HINSTANCE) {
-        let class = WNDCLASSW {
-            style: CS_HREDRAW | CS_VREDRAW | CS_OWNDC,
-            lpfnWndProc: Some(wnd_proc),
-            cbClsExtra: 0,
-            cbWndExtra: 0,
-            hInstance: h_inst,
-            hIcon: null_mut(),
-            hCursor: unsafe { LoadCursorW(null_mut(), IDC_ARROW) },
-            hbrBackground: null_mut(),
-            lpszMenuName: null(),
-            lpszClassName: wutils::wide_string(WINDOW_CLASS_NAME).as_ptr(),
-        };
+        if let Ok(_) =
+            wutils::component_registry().set_registered(h_inst as isize, WINDOW_CLASS_NAME)
+        {
+            let class = WNDCLASSW {
+                style: CS_HREDRAW | CS_VREDRAW | CS_OWNDC,
+                lpfnWndProc: Some(wnd_proc),
+                cbClsExtra: 0,
+                cbWndExtra: 0,
+                hInstance: h_inst,
+                hIcon: null_mut(),
+                hCursor: unsafe { LoadCursorW(null_mut(), IDC_ARROW) },
+                hbrBackground: null_mut(),
+                lpszMenuName: null(),
+                lpszClassName: wutils::wide_string(WINDOW_CLASS_NAME).as_ptr(),
+            };
 
-        wpanic_ifeq!(RegisterClassW(&class), 0);
+            wpanic_ifeq!(RegisterClassW(&class), 0);
+        }
     }
 
     pub fn new(parent_hwnd: HWND, h_inst: HINSTANCE) -> Box<Self> {
+        Self::register_class(h_inst);
+
         let me = Box::new(Self {
             hwnd: null_mut(),
             h_inst,
@@ -530,9 +537,6 @@ fn main() {
 
     let h_inst = wpanic_ifisnull!(GetModuleHandleW(null()));
 
-    Button::register_class(h_inst).unwrap();
-    TabBar::register_class(h_inst).unwrap();
-    Window::register_class(h_inst);
     let window = Window::new(null_mut(), h_inst);
 
     unsafe {
@@ -551,6 +555,12 @@ fn main() {
             null_mut(),
         );
     }
+
+    Button::new(window.hwnd, h_inst, 4, 200, 100, 50, None).unwrap();
+    let mut tbtn = ToggleButton::new(window.hwnd, h_inst, 154, 200, 100, 50, None, None).unwrap();
+    tbtn.on_click(Box::new(|| {
+        println!("toggled!");
+    }));
 
     let mut msg: MSG = unsafe { std::mem::zeroed() };
     unsafe {

@@ -1,7 +1,11 @@
+use std::borrow::BorrowMut;
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::io;
+use std::mem::MaybeUninit;
 use std::os::windows::prelude::OsStrExt;
 use std::ptr::null_mut;
+use std::sync::{Mutex, Once};
 
 use winapi::shared::minwindef::*;
 use winapi::shared::windef::*;
@@ -23,10 +27,12 @@ pub enum Error {
     Generic(String),
     WindowsInternal(io::Error),
     Hresult(HRESULT),
+    ComponentAlreadyRegistered,
 }
 
 pub trait Component {
     fn hwnd(&self) -> HWND;
+    fn register_class(h_inst: HINSTANCE) -> Result<(), Error>;
 }
 
 #[derive(Debug)]
@@ -34,6 +40,48 @@ pub struct TitleBarButtonRects {
     pub close: RECT,
     pub maximize: RECT,
     pub minimize: RECT,
+}
+
+pub struct ComponentRegistry {
+    registry: Mutex<HashMap<isize, HashMap<&'static str, bool>>>,
+}
+
+impl ComponentRegistry {
+    pub fn new() -> ComponentRegistry {
+        ComponentRegistry {
+            registry: Mutex::new(HashMap::with_capacity(3)),
+        }
+    }
+
+    pub fn set_registered(&self, h_inst: isize, class_name: &'static str) -> Result<(), Error> {
+        let mut guard = self.registry.lock().unwrap();
+        let registry = guard.borrow_mut();
+        if !registry.contains_key(&h_inst) {
+            registry.insert(h_inst, HashMap::with_capacity(10));
+        }
+
+        let hregistry = registry.get_mut(&h_inst).unwrap();
+        if hregistry.contains_key(class_name) {
+            return Err(Error::ComponentAlreadyRegistered);
+        }
+
+        hregistry.insert(class_name, true);
+
+        Ok(())
+    }
+}
+
+pub fn component_registry() -> &'static ComponentRegistry {
+    static mut SINGLETON: MaybeUninit<ComponentRegistry> = MaybeUninit::uninit();
+    static ONCE: Once = Once::new();
+
+    unsafe {
+        ONCE.call_once(|| {
+            SINGLETON.write(ComponentRegistry::new());
+        });
+
+        SINGLETON.assume_init_ref()
+    }
 }
 
 pub fn wide_string(s: &str) -> Vec<u16> {
