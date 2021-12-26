@@ -91,12 +91,12 @@ impl Button {
     }
 
     pub fn new(
+        parent_hwnd: HWND,
+        h_inst: HINSTANCE,
         x: i32,
         y: i32,
         width: i32,
         height: i32,
-        parent_hwnd: HWND,
-        h_inst: HINSTANCE,
         colors: Option<Colors>,
     ) -> Result<Box<Self>, Error> {
         let mut me = Box::new(Self {

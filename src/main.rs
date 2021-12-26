@@ -97,34 +97,34 @@ impl Window {
         let btn_down = RGB(TITLE_DOWN_COLOR.0, TITLE_DOWN_COLOR.1, TITLE_DOWN_COLOR.2);
 
         let minimize_button = Button::new(
-            0,
-            0,
-            0,
-            0,
             self.hwnd,
             self.h_inst,
+            0,
+            0,
+            0,
+            0,
             Some(ButtonColors::new(title_bg, btn_hover, btn_down)),
         )
         .unwrap();
 
         let maximize_button = Button::new(
-            0,
-            0,
-            0,
-            0,
             self.hwnd,
             self.h_inst,
+            0,
+            0,
+            0,
+            0,
             Some(ButtonColors::new(title_bg, btn_hover, btn_down)),
         )
         .unwrap();
 
         let close_button = Button::new(
-            0,
-            0,
-            0,
-            0,
             self.hwnd,
             self.h_inst,
+            0,
+            0,
+            0,
+            0,
             Some(ButtonColors::new(
                 title_bg,
                 RGB(232, 17, 35),

@@ -98,7 +98,7 @@ impl TabBar {
     }
 
     fn on_created(&mut self) {
-        let mut add_button = Button::new(0, 0, 0, 0, self.hwnd, self.h_inst, None).unwrap();
+        let mut add_button = Button::new(self.hwnd, self.h_inst, 0, 0, 0, 0, None).unwrap();
 
         let hwnd = self.hwnd;
         add_button.on_click(Box::new(move || {
@@ -176,7 +176,7 @@ impl TabBar {
         let hwnd = self.hwnd;
         let idx = self.tab_count;
         self.tab_count += 1;
-        let mut button = Button::new(0, 0, 0, 0, self.hwnd, self.h_inst, None).unwrap();
+        let mut button = Button::new(self.hwnd, self.h_inst, 0, 0, 0, 0, None).unwrap();
 
         button.on_click(Box::new(move || {
             wpanic_ifeq!(PostMessageW(hwnd, UM_CLICKTAB, idx as usize, 0), FALSE);
