@@ -14,6 +14,9 @@ const BUTTON_CLASS: &str = "CUSTOM_BTN";
 const TOGGLE_BUTTON_CLASS: &str = "CUSTOM_TBTN";
 const UM_INVALIDATE: u32 = WM_USER + 1;
 
+type CbFn<T> = Box<dyn Fn(&T)>;
+type CbFn2<T, U> = Box<dyn Fn(&T, U)>;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum State {
     None,
@@ -57,9 +60,9 @@ pub struct Button {
     is_visual_down: bool,
     deferred_start: Option<Instant>,
     deferred_running: bool,
-    click_cb: Option<Box<dyn Fn()>>,
-    paint_cb: Option<Box<dyn Fn(&Self, HDC)>>,
-    paint_last_cb: Option<Box<dyn Fn(&Self, HDC)>>,
+    click_cb: Option<CbFn<Self>>,
+    paint_cb: Option<CbFn2<Self, HDC>>,
+    paint_last_cb: Option<CbFn2<Self, HDC>>,
     colors: Colors,
 }
 
@@ -71,9 +74,9 @@ pub struct ToggleButton {
     is_visual_down: bool,
     deferred_start: Option<Instant>,
     deferred_running: bool,
-    click_cb: Option<Box<dyn Fn()>>,
-    paint_cb: Option<Box<dyn Fn(&Self, HDC)>>,
-    paint_last_cb: Option<Box<dyn Fn(&Self, HDC)>>,
+    click_cb: Option<CbFn<Self>>,
+    paint_cb: Option<CbFn2<Self, HDC>>,
+    paint_last_cb: Option<CbFn2<Self, HDC>>,
     is_toggled: bool,
     colors: Colors,
     toggled_colors: Colors,
@@ -85,9 +88,9 @@ pub trait BaseButton: Component {
     fn deferred_invalidate(&mut self);
     fn is_mouse_over(&self) -> bool;
     fn get_client_rect(&self) -> RECT;
-    fn on_click(&mut self, cb: Box<dyn Fn()>);
-    fn on_paint(&mut self, cb: Box<dyn Fn(&Self, HDC)>);
-    fn on_paint_last(&mut self, cb: Box<dyn Fn(&Self, HDC)>);
+    fn on_click(&mut self, cb: CbFn<Self>);
+    fn on_paint(&mut self, cb: CbFn2<Self, HDC>);
+    fn on_paint_last(&mut self, cb: CbFn2<Self, HDC>);
 
     fn invalidate_rect(&self) {
         wpanic_ifeq!(InvalidateRect(self.hwnd(), null(), FALSE), FALSE);
@@ -155,15 +158,15 @@ impl BaseButton for Button {
         wutils::get_client_rect(self.hwnd).unwrap()
     }
 
-    fn on_click(&mut self, cb: Box<dyn Fn()>) {
+    fn on_click(&mut self, cb: CbFn<Self>) {
         self.click_cb = Some(cb);
     }
 
-    fn on_paint(&mut self, cb: Box<dyn Fn(&Self, HDC)>) {
+    fn on_paint(&mut self, cb: CbFn2<Self, HDC>) {
         self.paint_cb = Some(cb);
     }
 
-    fn on_paint_last(&mut self, cb: Box<dyn Fn(&Self, HDC)>) {
+    fn on_paint_last(&mut self, cb: CbFn2<Self, HDC>) {
         self.paint_last_cb = Some(cb);
     }
 }
@@ -329,7 +332,7 @@ impl Button {
 
                     if self.is_down {
                         if let Some(cb) = self.click_cb.as_ref() {
-                            cb();
+                            cb(self);
                         }
                     }
                 } else {
@@ -413,15 +416,15 @@ impl BaseButton for ToggleButton {
         wutils::get_client_rect(self.hwnd).unwrap()
     }
 
-    fn on_click(&mut self, cb: Box<dyn Fn()>) {
+    fn on_click(&mut self, cb: CbFn<Self>) {
         self.click_cb = Some(cb);
     }
 
-    fn on_paint(&mut self, cb: Box<dyn Fn(&Self, HDC)>) {
+    fn on_paint(&mut self, cb: CbFn2<Self, HDC>) {
         self.paint_cb = Some(cb);
     }
 
-    fn on_paint_last(&mut self, cb: Box<dyn Fn(&Self, HDC)>) {
+    fn on_paint_last(&mut self, cb: CbFn2<Self, HDC>) {
         self.paint_last_cb = Some(cb);
     }
 }
@@ -611,7 +614,7 @@ impl ToggleButton {
                     if self.is_down {
                         self.toggle();
                         if let Some(cb) = self.click_cb.as_ref() {
-                            cb();
+                            cb(self);
                         }
                     }
                 } else {

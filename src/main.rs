@@ -153,11 +153,11 @@ impl Window {
         let maximize_button = self.maximize_button.as_mut().unwrap();
         let close_button = self.close_button.as_mut().unwrap();
 
-        minimize_button.on_click(Box::new(move || {
+        minimize_button.on_click(Box::new(move |_| {
             wpanic_ifeq!(ShowWindow(hwnd, SW_MINIMIZE), FALSE);
         }));
 
-        maximize_button.on_click(Box::new(move || {
+        maximize_button.on_click(Box::new(move |_| {
             let mode = if wutils::window_is_maximized(hwnd).unwrap() {
                 SW_NORMAL
             } else {
@@ -167,7 +167,7 @@ impl Window {
             wpanic_ifeq!(ShowWindow(hwnd, mode), FALSE);
         }));
 
-        close_button.on_click(Box::new(move || {
+        close_button.on_click(Box::new(move |_| {
             wpanic_ifeq!(PostMessageW(hwnd, WM_CLOSE, 0, 0), FALSE);
         }));
 
@@ -558,8 +558,8 @@ fn main() {
 
     Button::new(window.hwnd, h_inst, 4, 200, 100, 50, None).unwrap();
     let mut tbtn = ToggleButton::new(window.hwnd, h_inst, 154, 200, 100, 50, None, None).unwrap();
-    tbtn.on_click(Box::new(|| {
-        println!("toggled!");
+    tbtn.on_click(Box::new(|button| {
+        println!("toggled! current state: {:?}", button.is_toggled());
     }));
 
     let mut msg: MSG = unsafe { std::mem::zeroed() };

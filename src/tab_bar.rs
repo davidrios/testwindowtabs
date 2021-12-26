@@ -105,7 +105,7 @@ impl TabBar {
         let mut add_button = Button::new(self.hwnd, self.h_inst, 0, 0, 0, 0, None).unwrap();
 
         let hwnd = self.hwnd;
-        add_button.on_click(Box::new(move || {
+        add_button.on_click(Box::new(move |_| {
             wpanic_ifeq!(PostMessageW(hwnd, UM_ADDTAB, 0, 0), FALSE);
         }));
 
@@ -182,7 +182,7 @@ impl TabBar {
         self.tab_count += 1;
         let mut button = ToggleButton::new(self.hwnd, self.h_inst, 0, 0, 0, 0, None, None).unwrap();
 
-        button.on_click(Box::new(move || {
+        button.on_click(Box::new(move |_| {
             wpanic_ifeq!(PostMessageW(hwnd, UM_CLICKTAB, idx as usize, 0), FALSE);
         }));
 
