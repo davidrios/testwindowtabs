@@ -269,7 +269,9 @@ impl Button {
                         let hwnd = self.hwnd as isize;
                         thread::spawn(move || {
                             thread::sleep(Duration::new(0, 10000000));
-                            wpanic_ifeq!(PostMessageW(hwnd as _, UM_INVALIDATE, 0, 0), FALSE);
+                            unsafe {
+                                PostMessageW(hwnd as _, UM_INVALIDATE, 0, 0);
+                            }
                         });
                     } else {
                         self.deferred_running = false;
