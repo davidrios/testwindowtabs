@@ -1,3 +1,5 @@
+#![windows_subsystem = "windows"]
+
 mod button;
 mod tab_bar;
 mod wutils;
@@ -557,7 +559,7 @@ fn main() {
         );
     }
 
-    Button::new(window.hwnd, h_inst, 4, 200, 100, 50, None).unwrap();
+    let btn = Button::new(window.hwnd, h_inst, 4, 200, 100, 50, None).unwrap();
     let mut tbtn = ToggleButton::new(window.hwnd, h_inst, 154, 200, 100, 50, None, None).unwrap();
     tbtn.on_click(Box::new(|button| {
         println!("toggled! current state: {:?}", button.is_toggled());
