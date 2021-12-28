@@ -88,6 +88,14 @@ pub trait BaseButton: Component {
     }
 }
 
+impl Drop for Button {
+    fn drop(&mut self) {
+        unsafe {
+            DestroyWindow(self.hwnd);
+        }
+    }
+}
+
 impl Component for Button {
     fn hwnd(&self) -> HWND {
         self.hwnd
@@ -310,6 +318,14 @@ impl Button {
         }
 
         unsafe { DefWindowProcW(self.hwnd, message, wparam, lparam) }
+    }
+}
+
+impl Drop for ToggleButton {
+    fn drop(&mut self) {
+        unsafe {
+            DestroyWindow(self.hwnd);
+        }
     }
 }
 

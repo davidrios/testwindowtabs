@@ -24,6 +24,14 @@ pub struct TabBar {
     tab_buttons: HashMap<u32, Box<ToggleButton>>,
 }
 
+impl Drop for TabBar {
+    fn drop(&mut self) {
+        unsafe {
+            DestroyWindow(self.hwnd);
+        }
+    }
+}
+
 impl Component for TabBar {
     fn hwnd(&self) -> HWND {
         self.hwnd
