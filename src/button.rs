@@ -1,6 +1,5 @@
 use std::ptr::{null, null_mut};
-use std::time::{Duration, Instant};
-use std::{io, mem, thread};
+use std::{io, mem};
 
 use winapi::shared::minwindef::*;
 use winapi::shared::windef::*;
@@ -12,7 +11,6 @@ use crate::{wnd_proc_gen, wpanic_ifeq, wpanic_ifnull, wutils};
 
 const BUTTON_CLASS: &str = "CUSTOM_BTN";
 const TOGGLE_BUTTON_CLASS: &str = "CUSTOM_TBTN";
-const UM_INVALIDATE: u32 = WM_USER + 1;
 
 type CbFn<T> = Box<dyn Fn(&T)>;
 type CbFn2<T, U> = Box<dyn Fn(&T, U)>;
@@ -57,9 +55,6 @@ pub struct Button {
     state: State,
     track_mouse_leave: bool,
     is_down: bool,
-    is_visual_down: bool,
-    deferred_start: Option<Instant>,
-    deferred_running: bool,
     click_cb: Option<CbFn<Self>>,
     paint_cb: Option<CbFn2<Self, HDC>>,
     paint_last_cb: Option<CbFn2<Self, HDC>>,
@@ -71,9 +66,6 @@ pub struct ToggleButton {
     state: State,
     track_mouse_leave: bool,
     is_down: bool,
-    is_visual_down: bool,
-    deferred_start: Option<Instant>,
-    deferred_running: bool,
     click_cb: Option<CbFn<Self>>,
     paint_cb: Option<CbFn2<Self, HDC>>,
     paint_last_cb: Option<CbFn2<Self, HDC>>,
@@ -85,7 +77,6 @@ pub struct ToggleButton {
 pub trait BaseButton: Component {
     fn state(&self) -> State;
     fn colors(&self) -> &Colors;
-    fn deferred_invalidate(&mut self);
     fn is_mouse_over(&self) -> bool;
     fn get_client_rect(&self) -> RECT;
     fn on_click(&mut self, cb: CbFn<Self>);
@@ -135,14 +126,6 @@ impl BaseButton for Button {
         &self.colors
     }
 
-    fn deferred_invalidate(&mut self) {
-        self.deferred_start = Some(Instant::now());
-        if !self.deferred_running {
-            self.deferred_running = true;
-            wpanic_ifeq!(PostMessageW(self.hwnd, UM_INVALIDATE, 0, 0), FALSE);
-        }
-    }
-
     fn is_mouse_over(&self) -> bool {
         let mut cursor_point = POINT::default();
         wpanic_ifeq!(GetCursorPos(&mut cursor_point), FALSE);
@@ -188,9 +171,6 @@ impl Button {
             state: State::None,
             track_mouse_leave: false,
             is_down: false,
-            is_visual_down: false,
-            deferred_start: None,
-            deferred_running: false,
             click_cb: None,
             paint_cb: None,
             paint_last_cb: None,
@@ -230,20 +210,17 @@ impl Button {
     fn paint(&mut self) {
         let mut ps = PAINTSTRUCT::default();
         let hdc = wpanic_ifnull!(BeginPaint(self.hwnd, &mut ps));
+
         let o_pen = wpanic_ifnull!(SelectObject(hdc, GetStockObject(wutils::DC_PEN)));
         // let o_brush = wpanic_ifnull!(SelectObject(hdc, GetStockObject(wutils::DC_BRUSH)));
 
         if let Some(cb) = self.paint_cb.as_ref() {
             cb(self, hdc);
         } else {
-            let bg_color = if self.is_visual_down {
-                self.colors.down
-            } else {
-                match self.state {
-                    State::None => self.colors.default,
-                    State::Hover => self.colors.hover,
-                    State::Down => self.colors.down,
-                }
+            let bg_color = match self.state {
+                State::None => self.colors.default,
+                State::Hover => self.colors.hover,
+                State::Down => self.colors.down,
             };
 
             let bg_brush = wpanic_ifnull!(CreateSolidBrush(bg_color));
@@ -262,23 +239,6 @@ impl Button {
 
     fn handle_message(&mut self, message: UINT, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         match message {
-            UM_INVALIDATE => {
-                self.invalidate_rect();
-                if let Some(started) = self.deferred_start {
-                    if started.elapsed().as_millis() < 50 {
-                        let hwnd = self.hwnd as isize;
-                        thread::spawn(move || {
-                            thread::sleep(Duration::new(0, 10000000));
-                            unsafe {
-                                PostMessageW(hwnd as _, UM_INVALIDATE, 0, 0);
-                            }
-                        });
-                    } else {
-                        self.deferred_running = false;
-                        self.is_visual_down = false;
-                    }
-                }
-            }
             WM_PAINT => {
                 self.paint();
             }
@@ -320,9 +280,7 @@ impl Button {
             WM_LBUTTONDOWN => {
                 self.state = State::Down;
                 self.is_down = true;
-                self.is_visual_down = true;
                 self.invalidate_rect();
-                self.deferred_invalidate();
                 unsafe { SetCapture(self.hwnd) };
                 return 1;
             }
@@ -395,14 +353,6 @@ impl BaseButton for ToggleButton {
         &self.colors
     }
 
-    fn deferred_invalidate(&mut self) {
-        self.deferred_start = Some(Instant::now());
-        if !self.deferred_running {
-            self.deferred_running = true;
-            wpanic_ifeq!(PostMessageW(self.hwnd, UM_INVALIDATE, 0, 0), FALSE);
-        }
-    }
-
     fn is_mouse_over(&self) -> bool {
         let mut cursor_point = POINT::default();
         wpanic_ifeq!(GetCursorPos(&mut cursor_point), FALSE);
@@ -449,9 +399,6 @@ impl ToggleButton {
             state: State::None,
             track_mouse_leave: false,
             is_down: false,
-            is_visual_down: false,
-            deferred_start: None,
-            deferred_running: false,
             click_cb: None,
             paint_cb: None,
             paint_last_cb: None,
@@ -519,14 +466,10 @@ impl ToggleButton {
                 &self.colors
             };
 
-            let bg_color = if self.is_visual_down {
-                colors.down
-            } else {
-                match self.state {
-                    State::None => colors.default,
-                    State::Hover => colors.hover,
-                    State::Down => colors.down,
-                }
+            let bg_color = match self.state {
+                State::None => colors.default,
+                State::Hover => colors.hover,
+                State::Down => colors.down,
             };
 
             let bg_brush = wpanic_ifnull!(CreateSolidBrush(bg_color));
@@ -545,21 +488,6 @@ impl ToggleButton {
 
     fn handle_message(&mut self, message: UINT, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         match message {
-            UM_INVALIDATE => {
-                self.invalidate_rect();
-                if let Some(started) = self.deferred_start {
-                    if started.elapsed().as_millis() < 50 {
-                        let hwnd = self.hwnd as isize;
-                        thread::spawn(move || {
-                            thread::sleep(Duration::new(0, 10000000));
-                            wpanic_ifeq!(PostMessageW(hwnd as _, UM_INVALIDATE, 0, 0), FALSE);
-                        });
-                    } else {
-                        self.deferred_running = false;
-                        self.is_visual_down = false;
-                    }
-                }
-            }
             WM_PAINT => {
                 self.paint();
             }
@@ -601,9 +529,7 @@ impl ToggleButton {
             WM_LBUTTONDOWN => {
                 self.state = State::Down;
                 self.is_down = true;
-                self.is_visual_down = true;
                 self.invalidate_rect();
-                self.deferred_invalidate();
                 unsafe { SetCapture(self.hwnd) };
                 return 1;
             }
