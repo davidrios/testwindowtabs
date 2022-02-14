@@ -49,8 +49,8 @@ pub struct Window<'a> {
     close_button: Option<Box<Button<'a>>>,
     // tab_bar: Option<Box<TabBar>>,
     d2d_factory: &'a ID2D1Factory,
-    render_target: MaybeUninit<*mut ID2D1RenderTarget>,
-    brush: MaybeUninit<*mut ID2D1SolidColorBrush>,
+    d2d_render_target: Option<&'a ID2D1HwndRenderTarget>,
+    d2d_brush: Option<&'a ID2D1SolidColorBrush>,
 }
 
 impl<'a> Window<'a> {
@@ -61,17 +61,6 @@ impl<'a> Window<'a> {
     pub fn new(parent_hwnd: HWND, h_inst: HINSTANCE) -> Result<Box<Self>, Error> {
         Self::register_class(h_inst)?;
 
-        let mut d2d_factory = MaybeUninit::<*mut ID2D1Factory>::uninit();
-        wpanic_ifne!(
-            D2D1CreateFactory(
-                D2D1_FACTORY_TYPE_SINGLE_THREADED,
-                &ID2D1Factory::uuidof(),
-                &D2D1_FACTORY_OPTIONS::default(),
-                d2d_factory.as_mut_ptr() as _,
-            ),
-            0
-        );
-
         let me = Box::new(Self {
             hwnd: null_mut(),
             h_inst,
@@ -79,9 +68,9 @@ impl<'a> Window<'a> {
             maximize_button: None,
             close_button: None,
             // tab_bar: None,
-            d2d_factory: unsafe { &*d2d_factory.assume_init() },
-            render_target: MaybeUninit::uninit(),
-            brush: MaybeUninit::uninit(),
+            d2d_factory: wutils::create_d2d_factory()?,
+            d2d_render_target: None,
+            d2d_brush: None,
         });
 
         let window_style = WS_THICKFRAME   // required for a standard resizeable window
@@ -136,6 +125,7 @@ impl<'a> Window<'a> {
                 wutils::color_from_colorref(btn_hover),
                 wutils::color_from_colorref(btn_down),
             )),
+            Some(self.d2d_factory),
         )
         .unwrap();
 
@@ -151,6 +141,7 @@ impl<'a> Window<'a> {
                 wutils::color_from_colorref(btn_hover),
                 wutils::color_from_colorref(btn_down),
             )),
+            Some(self.d2d_factory),
         )
         .unwrap();
 
@@ -166,6 +157,7 @@ impl<'a> Window<'a> {
                 wutils::color_from_colorref(RGB(232, 17, 35)),
                 wutils::color_from_colorref(RGB(232, 73, 76)),
             )),
+            Some(self.d2d_factory),
         )
         .unwrap();
 
@@ -355,39 +347,64 @@ impl<'a> Window<'a> {
             wpanic_ifnull!(SelectObject(hdc, original));
             wpanic_ifeq!(DeleteObject(button_icon_pen as _), FALSE);
         }));
+    }
 
-        wpanic_ifne!(
-            self.d2d_factory.CreateHwndRenderTarget(
-                &D2D1_RENDER_TARGET_PROPERTIES::default(),
-                &D2D1_HWND_RENDER_TARGET_PROPERTIES {
-                    hwnd: self.hwnd,
-                    pixelSize: D2D1_SIZE_U {
-                        width: 500,
-                        height: 500
+    fn init_d2d(&mut self) {
+        if let None = self.d2d_render_target {
+            let mut render_target = MaybeUninit::<*mut ID2D1HwndRenderTarget>::uninit();
+
+            wpanic_ifne!(
+                self.d2d_factory.CreateHwndRenderTarget(
+                    &D2D1_RENDER_TARGET_PROPERTIES::default(),
+                    &D2D1_HWND_RENDER_TARGET_PROPERTIES {
+                        hwnd: self.hwnd,
+                        pixelSize: D2D1_SIZE_U {
+                            width: 500,
+                            height: 500
+                        },
+                        ..Default::default()
                     },
-                    ..Default::default()
-                },
-                self.render_target.as_mut_ptr() as _,
-            ),
-            0
-        );
+                    render_target.as_mut_ptr() as _,
+                ),
+                0
+            );
 
-        wpanic_ifne!(
-            (&*self.render_target.assume_init()).CreateSolidColorBrush(
-                &D2D1_COLOR_F {
-                    r: 1.0,
-                    g: 0.0,
-                    b: 0.0,
-                    a: 0.5
-                },
-                &D2D1_BRUSH_PROPERTIES {
-                    opacity: 1.0,
-                    ..Default::default()
-                },
-                self.brush.as_mut_ptr() as _
-            ),
-            0
-        );
+            self.d2d_render_target = Some(unsafe { &*render_target.assume_init() });
+        }
+
+        if let None = self.d2d_brush {
+            let mut brush = MaybeUninit::<*mut ID2D1SolidColorBrush>::uninit();
+            wpanic_ifne!(
+                self.d2d_render_target().CreateSolidColorBrush(
+                    &D2D1_COLOR_F {
+                        r: 1.0,
+                        g: 0.0,
+                        b: 0.0,
+                        a: 0.5
+                    },
+                    &D2D1_BRUSH_PROPERTIES {
+                        opacity: 1.0,
+                        ..Default::default()
+                    },
+                    brush.as_mut_ptr() as _
+                ),
+                0
+            );
+
+            self.d2d_brush = Some(unsafe { &*brush.assume_init() });
+        }
+    }
+
+    pub fn d2d_factory(&self) -> &ID2D1Factory {
+        self.d2d_factory
+    }
+
+    pub fn d2d_render_target(&self) -> &ID2D1HwndRenderTarget {
+        self.d2d_render_target.as_deref().unwrap()
+    }
+
+    pub fn d2d_brush(&self) -> &ID2D1SolidColorBrush {
+        self.d2d_brush.as_deref().unwrap()
     }
 
     fn reposition_component<T: Component>(&self, button_ref: Option<&Box<T>>, rect: RECT) {
@@ -437,6 +454,13 @@ impl<'a> Window<'a> {
             }
             WM_SIZE => {
                 self.reposition_components();
+                let rect = wutils::get_client_rect(self.hwnd).unwrap();
+                let size = D2D1_SIZE_U {
+                    width: rect.right as _,
+                    height: rect.bottom as _,
+                };
+                // self.init_d2d();
+                // wpanic_ifne!(self.d2d_render_target().Resize(&size), 0);
             }
             WM_NCHITTEST => {
                 // Let the default procedure handle resizing areas
@@ -565,8 +589,12 @@ impl<'a> Window<'a> {
 
                 wpanic_ifeq!(EndPaint(self.hwnd, &ps), FALSE);
 
+                self.init_d2d();
+
                 unsafe {
-                    let render_target = &*self.render_target.assume_init();
+                    let render_target = self.d2d_render_target();
+                    let brush = self.d2d_brush();
+
                     render_target.BeginDraw();
                     render_target.Clear(&D2D1_COLOR_F {
                         r: 255.0,
@@ -577,7 +605,7 @@ impl<'a> Window<'a> {
                     render_target.DrawLine(
                         D2D1_POINT_2F { x: 0.0, y: 0.0 },
                         D2D1_POINT_2F { x: 300.0, y: 300.0 },
-                        self.brush.assume_init() as _,
+                        brush as *const _ as _,
                         2.0,
                         null_mut(),
                     );
@@ -589,7 +617,7 @@ impl<'a> Window<'a> {
                             right: 100.0,
                             bottom: 100.0,
                         },
-                        self.brush.assume_init() as _,
+                        brush as *const _ as _,
                     );
 
                     render_target.EndDraw(null_mut(), null_mut());
@@ -660,7 +688,27 @@ fn main() {
         );
     }
 
-    // let _btn = Button::new(window.hwnd, h_inst, 4, 200, 100, 50, None).unwrap();
+    let mut _btn = Button::new(window.hwnd, h_inst, 4, 4, 50, 30, None, None).unwrap();
+    _btn.on_paint_last(Box::new(|button, _| {
+        let target = button.d2d_render_target();
+        let brush = button.d2d_brush();
+
+        unsafe {
+            brush.SetColor(&wutils::color_from_argb(0x88FF0000));
+
+            let size = target.GetSize();
+
+            target.FillRectangle(
+                &D2D1_RECT_F {
+                    left: size.width / 4.0,
+                    top: size.height / 4.0,
+                    right: size.width / 4.0 * 3.0,
+                    bottom: size.height / 4.0 * 3.0,
+                },
+                brush as *const _ as _,
+            );
+        }
+    }));
     let mut tbtn = ToggleButton::new(window.hwnd, h_inst, 154, 200, 100, 50, None, None).unwrap();
     let hwnd = window.hwnd;
     tbtn.on_click(Box::new(move |button| {

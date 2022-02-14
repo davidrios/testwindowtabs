@@ -77,9 +77,10 @@ pub trait BaseButton: Component {
 
 pub struct Button<'a> {
     hwnd: HWND,
+    is_own_d2d: bool,
     d2d_factory: &'a ID2D1Factory,
-    d2d_render_target: Option<&'a mut ID2D1HwndRenderTarget>,
-    d2d_brush: Option<&'a mut ID2D1SolidColorBrush>,
+    d2d_render_target: Option<&'a ID2D1HwndRenderTarget>,
+    d2d_brush: Option<&'a ID2D1SolidColorBrush>,
     state: State,
     track_mouse_leave: bool,
     is_down: bool,
@@ -91,16 +92,25 @@ pub struct Button<'a> {
 
 impl Drop for Button<'_> {
     fn drop(&mut self) {
-        unsafe {
-            if let Some(ref brush) = self.d2d_brush {
+        if let Some(ref brush) = self.d2d_brush {
+            unsafe {
                 brush.Release();
             }
+        }
 
-            if let Some(ref render_target) = self.d2d_render_target {
+        if let Some(ref render_target) = self.d2d_render_target {
+            unsafe {
                 render_target.Release();
             }
+        }
 
-            self.d2d_factory.Release();
+        if self.is_own_d2d {
+            unsafe {
+                self.d2d_factory.Release();
+            }
+        }
+
+        unsafe {
             DestroyWindow(self.hwnd);
         }
     }
@@ -147,25 +157,24 @@ impl<'a> Button<'a> {
         width: i32,
         height: i32,
         colors: Option<Colors>,
+        d2d_factory: Option<&'a ID2D1Factory>,
     ) -> Result<Box<Self>, Error> {
         Self::register_class(h_inst)?;
 
-        let mut d2d_factory = MaybeUninit::<*mut ID2D1Factory>::uninit();
-        let res = unsafe {
-            D2D1CreateFactory(
-                D2D1_FACTORY_TYPE_SINGLE_THREADED,
-                &ID2D1Factory::uuidof(),
-                &D2D1_FACTORY_OPTIONS::default(),
-                d2d_factory.as_mut_ptr() as _,
-            )
+        let mut is_own_d2d = false;
+
+        let factory = match d2d_factory {
+            Some(some) => some,
+            None => {
+                is_own_d2d = true;
+                wutils::create_d2d_factory()?
+            }
         };
-        if res != 0 {
-            return Err(Error::Hresult(res));
-        }
 
         let mut me = Box::new(Self {
             hwnd: null_mut(),
-            d2d_factory: unsafe { &*d2d_factory.assume_init() },
+            is_own_d2d,
+            d2d_factory: factory,
             d2d_render_target: None,
             d2d_brush: None,
             state: State::None,
@@ -207,7 +216,7 @@ impl<'a> Button<'a> {
         Ok(me)
     }
 
-    pub fn d2d_render_target(&mut self) -> &ID2D1HwndRenderTarget {
+    fn init_d2d(&mut self) {
         if let None = self.d2d_render_target {
             let mut render_target = MaybeUninit::<*mut ID2D1HwndRenderTarget>::uninit();
 
@@ -216,10 +225,6 @@ impl<'a> Button<'a> {
                     &D2D1_RENDER_TARGET_PROPERTIES::default(),
                     &D2D1_HWND_RENDER_TARGET_PROPERTIES {
                         hwnd: self.hwnd,
-                        pixelSize: D2D1_SIZE_U {
-                            width: 0,
-                            height: 0
-                        },
                         ..Default::default()
                     },
                     render_target.as_mut_ptr() as _,
@@ -227,18 +232,13 @@ impl<'a> Button<'a> {
                 0
             );
 
-            self.d2d_render_target = Some(unsafe { &mut *render_target.assume_init() });
+            self.d2d_render_target = Some(unsafe { &*render_target.assume_init() });
         }
 
-        self.d2d_render_target.as_deref_mut().unwrap()
-    }
-
-    pub fn d2d_brush(&mut self) -> &mut ID2D1SolidColorBrush {
         if let None = self.d2d_brush {
             let mut brush = MaybeUninit::<*mut ID2D1SolidColorBrush>::uninit();
-            let render_target = self.d2d_render_target();
             wpanic_ifne!(
-                render_target.CreateSolidColorBrush(
+                self.d2d_render_target().CreateSolidColorBrush(
                     &D2D1_COLOR_F::default(),
                     &D2D1_BRUSH_PROPERTIES {
                         opacity: 1.0,
@@ -249,15 +249,33 @@ impl<'a> Button<'a> {
                 0
             );
 
-            self.d2d_brush = Some(unsafe { &mut *brush.assume_init() });
+            self.d2d_brush = Some(unsafe { &*brush.assume_init() });
         }
+    }
 
-        self.d2d_brush.as_deref_mut().unwrap()
+    pub fn d2d_factory(&self) -> &ID2D1Factory {
+        self.d2d_factory
+    }
+
+    pub fn d2d_render_target(&self) -> &ID2D1HwndRenderTarget {
+        self.d2d_render_target.as_deref().unwrap()
+    }
+
+    pub fn d2d_brush(&self) -> &ID2D1SolidColorBrush {
+        self.d2d_brush.as_deref().unwrap()
     }
 
     fn paint(&mut self) {
+        self.init_d2d();
+
         let mut ps = PAINTSTRUCT::default();
         let hdc = wpanic_ifnull!(BeginPaint(self.hwnd, &mut ps));
+
+        let target = self.d2d_render_target();
+        unsafe {
+            target.BeginDraw();
+            target.Clear(null_mut());
+        }
 
         if let Some(cb) = self.paint_cb.as_ref() {
             cb(self, hdc);
@@ -268,14 +286,10 @@ impl<'a> Button<'a> {
                 State::Down => self.colors.down,
             };
 
+            let brush = self.d2d_brush();
+
             unsafe {
-                self.d2d_brush().SetColor(&bg_color);
-
-                let brushptr = self.d2d_brush() as *mut _ as *mut ID2D1Brush;
-
-                let target = self.d2d_render_target();
-                target.BeginDraw();
-                target.Clear(null_mut());
+                brush.SetColor(&bg_color);
 
                 let size = target.GetSize();
 
@@ -286,15 +300,17 @@ impl<'a> Button<'a> {
                         right: size.width,
                         bottom: size.height,
                     },
-                    brushptr,
+                    brush as *const _ as _,
                 );
-
-                target.EndDraw(null_mut(), null_mut());
             }
         }
 
         if let Some(cb) = self.paint_last_cb.as_ref() {
             cb(self, hdc);
+        }
+
+        unsafe {
+            target.EndDraw(null_mut(), null_mut());
         }
 
         wpanic_ifeq!(EndPaint(self.hwnd, &ps), FALSE);
@@ -308,6 +324,7 @@ impl<'a> Button<'a> {
                     width: rect.right as _,
                     height: rect.bottom as _,
                 };
+                self.init_d2d();
                 wpanic_ifne!(self.d2d_render_target().Resize(&size), 0);
             }
             WM_ERASEBKGND => {

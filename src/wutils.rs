@@ -11,8 +11,12 @@ use winapi::shared::d3d9types::{D3DCOLORVALUE, D3DCOLOR_COLORVALUE};
 use winapi::shared::minwindef::*;
 use winapi::shared::windef::*;
 use winapi::shared::winerror::{HRESULT, S_OK};
+use winapi::um::d2d1::{
+    D2D1CreateFactory, ID2D1Factory, D2D1_FACTORY_OPTIONS, D2D1_FACTORY_TYPE_SINGLE_THREADED,
+};
 use winapi::um::uxtheme::*;
 use winapi::um::winuser::*;
+use winapi::Interface;
 
 pub const CS_ACTIVE: i32 = 1;
 pub const DC_BRUSH: i32 = 18;
@@ -23,12 +27,8 @@ pub const WP_CAPTION: i32 = 1;
 pub const TOP_AND_BOTTOM_BORDERS: i32 = 2;
 pub const FAKE_SHADOW_HEIGHT: i32 = 1;
 
-type WndProc = unsafe extern "system" fn(
-    hwnd: winapi::shared::windef::HWND,
-    message: winapi::shared::minwindef::UINT,
-    wparam: winapi::shared::minwindef::WPARAM,
-    lparam: winapi::shared::minwindef::LPARAM,
-) -> winapi::shared::minwindef::LRESULT;
+type WndProc =
+    unsafe extern "system" fn(hwnd: HWND, message: UINT, wparam: WPARAM, lparam: LPARAM) -> LRESULT;
 
 #[derive(Debug)]
 pub enum Error {
@@ -298,6 +298,7 @@ pub fn color_from_argb(color: u32) -> D3DCOLORVALUE {
         b: (color & 0xff) as f32 / 255.0,
     }
 }
+
 pub fn color_from_colorref(color: COLORREF) -> D3DCOLORVALUE {
     D3DCOLORVALUE {
         a: 1.0,
@@ -306,7 +307,25 @@ pub fn color_from_colorref(color: COLORREF) -> D3DCOLORVALUE {
         b: ((color >> 16) & 0xff) as f32 / 255.0,
     }
 }
+
 pub fn color_to_colorref(color: D3DCOLORVALUE) -> COLORREF {
     let D3DCOLORVALUE { r, g, b, .. } = color;
     ((r * 255f32) as u32) | (((g * 255f32) as u32) << 8) | (((b * 255f32) as u32) << 16)
+}
+
+pub fn create_d2d_factory<'a>() -> Result<&'a ID2D1Factory, Error> {
+    let mut d2d_factory = MaybeUninit::<*mut ID2D1Factory>::uninit();
+    let res = unsafe {
+        D2D1CreateFactory(
+            D2D1_FACTORY_TYPE_SINGLE_THREADED,
+            &ID2D1Factory::uuidof(),
+            &D2D1_FACTORY_OPTIONS::default(),
+            d2d_factory.as_mut_ptr() as _,
+        )
+    };
+    if res == 0 {
+        Ok(unsafe { &*d2d_factory.assume_init() })
+    } else {
+        Err(Error::Hresult(res))
+    }
 }
