@@ -2,6 +2,7 @@
 name = "testwindowtabs"
 version = "0.1.0"
 edition = "2021"
+build = "build.rs"
 
 [profile.release]
 lto = true
@@ -19,4 +20,8 @@ winapi = { version = "0.3", features = [
     "winerror",
     "wingdi",
     "winuser",
+    "d2d1",
 ]}
+
+[build-dependencies]
+embed-resource = "1.6"

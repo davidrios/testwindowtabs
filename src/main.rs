@@ -1,23 +1,32 @@
 #![windows_subsystem = "windows"]
 
 mod button;
-mod tab_bar;
+// mod tab_bar;
 mod wutils;
 
-use std::io;
+use std::borrow::BorrowMut;
+use std::mem::MaybeUninit;
 use std::ptr::{null, null_mut};
+use std::{io, mem};
 
+use winapi::shared::dxgiformat::DXGI_FORMAT_R8G8B8A8_UNORM;
 use winapi::shared::minwindef::*;
 use winapi::shared::windef::*;
+use winapi::um::d2d1::*;
+use winapi::um::dcommon::{
+    D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_ALPHA_MODE_STRAIGHT, D2D1_MATRIX_3X2_F, D2D1_PIXEL_FORMAT,
+    D2D_MATRIX_3X2_F,
+};
 use winapi::um::libloaderapi::GetModuleHandleW;
 use winapi::um::wincon::{AttachConsole, ATTACH_PARENT_PROCESS};
 use winapi::um::wingdi::*;
 use winapi::um::winuser::*;
+use winapi::Interface;
 
 use crate::button::{
     BaseButton, Button, Colors as ButtonColors, State as ButtonState, ToggleButton,
 };
-use crate::tab_bar::TabBar;
+// use crate::tab_bar::TabBar;
 use crate::wutils::Component;
 
 const WINDOW_CLASS_NAME: &str = "testwindowtabs.Window";
@@ -29,16 +38,19 @@ const TITLE_ITEM_COLOR: (u8, u8, u8) = (33, 33, 33);
 const TITLE_ITEM_BLUR_COLOR: (u8, u8, u8) = (127, 127, 127);
 const ICON_DIMENSION: i32 = 10;
 
-pub struct Window {
+pub struct Window<'a> {
     hwnd: HWND,
     h_inst: HINSTANCE,
-    minimize_button: Option<Box<Button>>,
-    maximize_button: Option<Box<Button>>,
-    close_button: Option<Box<Button>>,
-    tab_bar: Option<Box<TabBar>>,
+    minimize_button: Option<Box<Button<'a>>>,
+    maximize_button: Option<Box<Button<'a>>>,
+    close_button: Option<Box<Button<'a>>>,
+    // tab_bar: Option<Box<TabBar>>,
+    d2d_factory: &'a ID2D1Factory,
+    render_target: MaybeUninit<*mut ID2D1RenderTarget>,
+    brush: MaybeUninit<*mut ID2D1SolidColorBrush>,
 }
 
-impl Window {
+impl<'a> Window<'a> {
     pub fn register_class(h_inst: HINSTANCE) {
         if let Ok(_) =
             wutils::component_registry().set_registered(h_inst as isize, WINDOW_CLASS_NAME)
@@ -61,6 +73,17 @@ impl Window {
     }
 
     pub fn new(parent_hwnd: HWND, h_inst: HINSTANCE) -> Box<Self> {
+        let mut d2d_factory = MaybeUninit::<*mut ID2D1Factory>::uninit();
+        wpanic_ifne!(
+            D2D1CreateFactory(
+                D2D1_FACTORY_TYPE_SINGLE_THREADED,
+                &ID2D1Factory::uuidof(),
+                &D2D1_FACTORY_OPTIONS::default(),
+                d2d_factory.as_mut_ptr() as _,
+            ),
+            0
+        );
+
         Self::register_class(h_inst);
 
         let me = Box::new(Self {
@@ -69,7 +92,10 @@ impl Window {
             minimize_button: None,
             maximize_button: None,
             close_button: None,
-            tab_bar: None,
+            // tab_bar: None,
+            d2d_factory: unsafe { &*d2d_factory.assume_init() },
+            render_target: MaybeUninit::uninit(),
+            brush: MaybeUninit::uninit(),
         });
 
         let window_style = WS_THICKFRAME   // required for a standard resizeable window
@@ -83,7 +109,7 @@ impl Window {
             0,
             wutils::wide_string(WINDOW_CLASS_NAME).as_ptr(),
             wutils::wide_string(WINDOW_TITLE).as_ptr(),
-            window_style,
+            window_style | WS_CLIPCHILDREN,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
             500,
@@ -106,6 +132,12 @@ impl Window {
         );
         let btn_down = RGB(TITLE_DOWN_COLOR.0, TITLE_DOWN_COLOR.1, TITLE_DOWN_COLOR.2);
 
+        let rgb = RGB(100, 110, 120);
+        // dbg!(rgb);
+        // assert!(rgb == 0x00646e78);
+        let color = wutils::color_from_colorref(rgb);
+        assert!(wutils::color_to_colorref(color) == 0x786e64);
+
         let minimize_button = Button::new(
             self.hwnd,
             self.h_inst,
@@ -113,7 +145,11 @@ impl Window {
             0,
             0,
             0,
-            Some(ButtonColors::new(title_bg, btn_hover, btn_down)),
+            Some(ButtonColors::new(
+                wutils::color_from_colorref(title_bg),
+                wutils::color_from_colorref(btn_hover),
+                wutils::color_from_colorref(btn_down),
+            )),
         )
         .unwrap();
 
@@ -124,7 +160,11 @@ impl Window {
             0,
             0,
             0,
-            Some(ButtonColors::new(title_bg, btn_hover, btn_down)),
+            Some(ButtonColors::new(
+                wutils::color_from_colorref(title_bg),
+                wutils::color_from_colorref(btn_hover),
+                wutils::color_from_colorref(btn_down),
+            )),
         )
         .unwrap();
 
@@ -136,19 +176,19 @@ impl Window {
             0,
             0,
             Some(ButtonColors::new(
-                title_bg,
-                RGB(232, 17, 35),
-                RGB(232, 73, 76),
+                wutils::color_from_colorref(title_bg),
+                wutils::color_from_colorref(RGB(232, 17, 35)),
+                wutils::color_from_colorref(RGB(232, 73, 76)),
             )),
         )
         .unwrap();
 
-        let tab_bar = TabBar::new(0, 0, 0, 0, self.hwnd, self.h_inst).unwrap();
+        // let tab_bar = TabBar::new(0, 0, 0, 0, self.hwnd, self.h_inst).unwrap();
 
         self.minimize_button = Some(minimize_button);
         self.maximize_button = Some(maximize_button);
         self.close_button = Some(close_button);
-        self.tab_bar = Some(tab_bar);
+        // self.tab_bar = Some(tab_bar);
 
         let hwnd = self.hwnd;
 
@@ -216,13 +256,22 @@ impl Window {
             let colors = button.colors();
             match button.state() {
                 ButtonState::None => {
-                    wpanic_ifnull!(SetDCBrushColor(hdc, colors.default()));
+                    wpanic_ifnull!(SetDCBrushColor(
+                        hdc,
+                        wutils::color_to_colorref(colors.default())
+                    ));
                 }
                 ButtonState::Hover => {
-                    wpanic_ifnull!(SetDCBrushColor(hdc, colors.hover()));
+                    wpanic_ifnull!(SetDCBrushColor(
+                        hdc,
+                        wutils::color_to_colorref(colors.hover())
+                    ));
                 }
                 ButtonState::Down => {
-                    wpanic_ifnull!(SetDCBrushColor(hdc, colors.down()));
+                    wpanic_ifnull!(SetDCBrushColor(
+                        hdc,
+                        wutils::color_to_colorref(colors.down())
+                    ));
                 }
             }
 
@@ -320,6 +369,39 @@ impl Window {
             wpanic_ifnull!(SelectObject(hdc, original));
             wpanic_ifeq!(DeleteObject(button_icon_pen as _), FALSE);
         }));
+
+        wpanic_ifne!(
+            self.d2d_factory.CreateHwndRenderTarget(
+                &D2D1_RENDER_TARGET_PROPERTIES::default(),
+                &D2D1_HWND_RENDER_TARGET_PROPERTIES {
+                    hwnd: self.hwnd,
+                    pixelSize: D2D1_SIZE_U {
+                        width: 500,
+                        height: 500
+                    },
+                    ..Default::default()
+                },
+                self.render_target.as_mut_ptr() as _,
+            ),
+            0
+        );
+
+        wpanic_ifne!(
+            (&*self.render_target.assume_init()).CreateSolidColorBrush(
+                &D2D1_COLOR_F {
+                    r: 1.0,
+                    g: 0.0,
+                    b: 0.0,
+                    a: 0.5
+                },
+                &D2D1_BRUSH_PROPERTIES {
+                    opacity: 1.0,
+                    ..Default::default()
+                },
+                self.brush.as_mut_ptr() as _
+            ),
+            0
+        );
     }
 
     fn reposition_component<T: Component>(&self, button_ref: Option<&Box<T>>, rect: RECT) {
@@ -348,7 +430,7 @@ impl Window {
         let mut tab_rect = title_bar_rect;
         tab_rect.top = wutils::FAKE_SHADOW_HEIGHT + 2;
         tab_rect.right = button_rects.minimize.left - 100;
-        self.reposition_component(self.tab_bar.as_ref(), tab_rect);
+        // self.reposition_component(self.tab_bar.as_ref(), tab_rect);
     }
 
     fn handle_message(&mut self, message: UINT, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -404,6 +486,9 @@ impl Window {
                 }
 
                 return HTCLIENT;
+            }
+            WM_ERASEBKGND => {
+                return 1;
             }
             WM_PAINT => {
                 let has_focus = !unsafe { GetFocus() }.is_null();
@@ -493,6 +578,36 @@ impl Window {
                 wpanic_ifeq!(DeleteObject(fake_top_shadow_brush as _), FALSE);
 
                 wpanic_ifeq!(EndPaint(self.hwnd, &ps), FALSE);
+
+                unsafe {
+                    let render_target = &*self.render_target.assume_init();
+                    render_target.BeginDraw();
+                    render_target.Clear(&D2D1_COLOR_F {
+                        r: 255.0,
+                        g: 255.0,
+                        b: 255.0,
+                        a: 255.0,
+                    });
+                    render_target.DrawLine(
+                        D2D1_POINT_2F { x: 0.0, y: 0.0 },
+                        D2D1_POINT_2F { x: 300.0, y: 300.0 },
+                        self.brush.assume_init() as _,
+                        2.0,
+                        null_mut(),
+                    );
+
+                    render_target.FillRectangle(
+                        &D2D1_RECT_F {
+                            left: 0.0,
+                            top: 0.0,
+                            right: 100.0,
+                            bottom: 100.0,
+                        },
+                        self.brush.assume_init() as _,
+                    );
+
+                    render_target.EndDraw(null_mut(), null_mut());
+                }
             }
             WM_CREATE => {
                 let mut size_rect = RECT::default();
@@ -559,10 +674,12 @@ fn main() {
         );
     }
 
-    let _btn = Button::new(window.hwnd, h_inst, 4, 200, 100, 50, None).unwrap();
+    // let _btn = Button::new(window.hwnd, h_inst, 4, 200, 100, 50, None).unwrap();
     let mut tbtn = ToggleButton::new(window.hwnd, h_inst, 154, 200, 100, 50, None, None).unwrap();
-    tbtn.on_click(Box::new(|button| {
+    let hwnd = window.hwnd;
+    tbtn.on_click(Box::new(move |button| {
         println!("toggled! current state: {:?}", button.is_toggled());
+        wpanic_ifeq!(InvalidateRect(hwnd, null_mut(), FALSE), FALSE);
     }));
 
     let mut msg: MSG = unsafe { std::mem::zeroed() };

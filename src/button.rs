@@ -1,13 +1,29 @@
+use std::borrow::Borrow;
+use std::cell::RefCell;
+use std::mem::MaybeUninit;
 use std::ptr::{null, null_mut};
 use std::{io, mem};
 
-use winapi::shared::minwindef::*;
-use winapi::shared::windef::*;
-use winapi::um::wingdi::*;
-use winapi::um::winuser::*;
+use winapi::shared::d3d9types::D3DCOLORVALUE;
+use winapi::shared::minwindef::{FALSE, HINSTANCE, LPARAM, LRESULT, TRUE, UINT, WPARAM};
+use winapi::shared::windef::{HDC, HWND, POINT, RECT};
+use winapi::um::d2d1::{
+    D2D1CreateFactory, ID2D1Brush, ID2D1Factory, ID2D1HwndRenderTarget, ID2D1SolidColorBrush,
+    D2D1_BRUSH_PROPERTIES, D2D1_COLOR_F, D2D1_FACTORY_OPTIONS, D2D1_FACTORY_TYPE_SINGLE_THREADED,
+    D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_RECT_F, D2D1_RENDER_TARGET_PROPERTIES, D2D1_SIZE_U,
+};
+use winapi::um::wingdi::{CreateSolidBrush, DeleteObject, GetStockObject, SelectObject};
+use winapi::um::winuser::{
+    BeginPaint, CreateWindowExW, DefWindowProcW, DestroyWindow, EndPaint, FillRect, GetCursorPos,
+    InvalidateRect, LoadCursorW, PtInRect, RegisterClassW, ReleaseCapture, ScreenToClient,
+    SetCapture, TrackMouseEvent, CS_HREDRAW, CS_OWNDC, CS_VREDRAW, IDC_ARROW, MK_LBUTTON,
+    PAINTSTRUCT, TME_LEAVE, TRACKMOUSEEVENT, WM_ERASEBKGND, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MOUSELEAVE, WM_MOUSEMOVE, WM_PAINT, WM_SIZE, WNDCLASSW, WS_CHILD, WS_VISIBLE,
+};
+use winapi::Interface;
 
 use crate::wutils::{Component, Error};
-use crate::{wnd_proc_gen, wpanic_ifeq, wpanic_ifnull, wutils};
+use crate::{wnd_proc_gen, wpanic_ifeq, wpanic_ifne, wpanic_ifnull, wutils};
 
 const BUTTON_CLASS: &str = "CUSTOM_BTN";
 const TOGGLE_BUTTON_CLASS: &str = "CUSTOM_TBTN";
@@ -23,13 +39,13 @@ pub enum State {
 }
 
 pub struct Colors {
-    default: COLORREF,
-    hover: COLORREF,
-    down: COLORREF,
+    default: D3DCOLORVALUE,
+    hover: D3DCOLORVALUE,
+    down: D3DCOLORVALUE,
 }
 
 impl Colors {
-    pub fn new(default: COLORREF, hover: COLORREF, down: COLORREF) -> Self {
+    pub fn new(default: D3DCOLORVALUE, hover: D3DCOLORVALUE, down: D3DCOLORVALUE) -> Self {
         Self {
             default,
             hover,
@@ -37,41 +53,17 @@ impl Colors {
         }
     }
 
-    pub fn default(&self) -> COLORREF {
+    pub fn default(&self) -> D3DCOLORVALUE {
         self.default
     }
 
-    pub fn hover(&self) -> COLORREF {
+    pub fn hover(&self) -> D3DCOLORVALUE {
         self.hover
     }
 
-    pub fn down(&self) -> COLORREF {
+    pub fn down(&self) -> D3DCOLORVALUE {
         self.down
     }
-}
-
-pub struct Button {
-    hwnd: HWND,
-    state: State,
-    track_mouse_leave: bool,
-    is_down: bool,
-    click_cb: Option<CbFn<Self>>,
-    paint_cb: Option<CbFn2<Self, HDC>>,
-    paint_last_cb: Option<CbFn2<Self, HDC>>,
-    colors: Colors,
-}
-
-pub struct ToggleButton {
-    hwnd: HWND,
-    state: State,
-    track_mouse_leave: bool,
-    is_down: bool,
-    click_cb: Option<CbFn<Self>>,
-    paint_cb: Option<CbFn2<Self, HDC>>,
-    paint_last_cb: Option<CbFn2<Self, HDC>>,
-    is_toggled: bool,
-    colors: Colors,
-    toggled_colors: Colors,
 }
 
 pub trait BaseButton: Component {
@@ -88,15 +80,38 @@ pub trait BaseButton: Component {
     }
 }
 
-impl Drop for Button {
+pub struct Button<'a> {
+    hwnd: HWND,
+    d2d_factory: &'a ID2D1Factory,
+    d2d_render_target: Option<&'a mut ID2D1HwndRenderTarget>,
+    d2d_brush: Option<&'a mut ID2D1SolidColorBrush>,
+    state: State,
+    track_mouse_leave: bool,
+    is_down: bool,
+    click_cb: Option<CbFn<Self>>,
+    paint_cb: Option<CbFn2<Self, HDC>>,
+    paint_last_cb: Option<CbFn2<Self, HDC>>,
+    colors: Colors,
+}
+
+impl Drop for Button<'_> {
     fn drop(&mut self) {
         unsafe {
+            if let Some(ref brush) = self.d2d_brush {
+                brush.Release();
+            }
+
+            if let Some(ref render_target) = self.d2d_render_target {
+                render_target.Release();
+            }
+
+            self.d2d_factory.Release();
             DestroyWindow(self.hwnd);
         }
     }
 }
 
-impl Component for Button {
+impl Component for Button<'_> {
     fn hwnd(&self) -> HWND {
         self.hwnd
     }
@@ -125,7 +140,7 @@ impl Component for Button {
     }
 }
 
-impl BaseButton for Button {
+impl BaseButton for Button<'_> {
     fn state(&self) -> State {
         self.state
     }
@@ -162,7 +177,7 @@ impl BaseButton for Button {
     }
 }
 
-impl Button {
+impl<'a> Button<'a> {
     pub fn new(
         parent_hwnd: HWND,
         h_inst: HINSTANCE,
@@ -174,8 +189,24 @@ impl Button {
     ) -> Result<Box<Self>, Error> {
         Self::register_class(h_inst)?;
 
+        let mut d2d_factory = MaybeUninit::<*mut ID2D1Factory>::uninit();
+        let res = unsafe {
+            D2D1CreateFactory(
+                D2D1_FACTORY_TYPE_SINGLE_THREADED,
+                &ID2D1Factory::uuidof(),
+                &D2D1_FACTORY_OPTIONS::default(),
+                d2d_factory.as_mut_ptr() as _,
+            )
+        };
+        if res != 0 {
+            return Err(Error::Hresult(res));
+        }
+
         let mut me = Box::new(Self {
             hwnd: null_mut(),
+            d2d_factory: unsafe { &*d2d_factory.assume_init() },
+            d2d_render_target: None,
+            d2d_brush: None,
             state: State::None,
             track_mouse_leave: false,
             is_down: false,
@@ -183,9 +214,9 @@ impl Button {
             paint_cb: None,
             paint_last_cb: None,
             colors: colors.unwrap_or(Colors {
-                default: RGB(100, 100, 100),
-                hover: RGB(80, 80, 80),
-                down: RGB(60, 60, 60),
+                default: wutils::color_from_argb(0xff646464),
+                hover: wutils::color_from_argb(0xff505050),
+                down: wutils::color_from_argb(0xff3c3c3c),
             }),
         });
 
@@ -215,12 +246,57 @@ impl Button {
         Ok(me)
     }
 
+    pub fn d2d_render_target(&mut self) -> &ID2D1HwndRenderTarget {
+        if let None = self.d2d_render_target {
+            let mut render_target = MaybeUninit::<*mut ID2D1HwndRenderTarget>::uninit();
+
+            wpanic_ifne!(
+                self.d2d_factory.CreateHwndRenderTarget(
+                    &D2D1_RENDER_TARGET_PROPERTIES::default(),
+                    &D2D1_HWND_RENDER_TARGET_PROPERTIES {
+                        hwnd: self.hwnd,
+                        pixelSize: D2D1_SIZE_U {
+                            width: 0,
+                            height: 0
+                        },
+                        ..Default::default()
+                    },
+                    render_target.as_mut_ptr() as _,
+                ),
+                0
+            );
+
+            self.d2d_render_target = Some(unsafe { &mut *render_target.assume_init() });
+        }
+
+        self.d2d_render_target.as_deref_mut().unwrap()
+    }
+
+    pub fn d2d_brush(&mut self) -> &mut ID2D1SolidColorBrush {
+        if let None = self.d2d_brush {
+            let mut brush = MaybeUninit::<*mut ID2D1SolidColorBrush>::uninit();
+            let render_target = self.d2d_render_target();
+            wpanic_ifne!(
+                render_target.CreateSolidColorBrush(
+                    &D2D1_COLOR_F::default(),
+                    &D2D1_BRUSH_PROPERTIES {
+                        opacity: 1.0,
+                        ..Default::default()
+                    },
+                    brush.as_mut_ptr() as _
+                ),
+                0
+            );
+
+            self.d2d_brush = Some(unsafe { &mut *brush.assume_init() });
+        }
+
+        self.d2d_brush.as_deref_mut().unwrap()
+    }
+
     fn paint(&mut self) {
         let mut ps = PAINTSTRUCT::default();
         let hdc = wpanic_ifnull!(BeginPaint(self.hwnd, &mut ps));
-
-        let o_pen = wpanic_ifnull!(SelectObject(hdc, GetStockObject(wutils::DC_PEN)));
-        // let o_brush = wpanic_ifnull!(SelectObject(hdc, GetStockObject(wutils::DC_BRUSH)));
 
         if let Some(cb) = self.paint_cb.as_ref() {
             cb(self, hdc);
@@ -231,22 +307,51 @@ impl Button {
                 State::Down => self.colors.down,
             };
 
-            let bg_brush = wpanic_ifnull!(CreateSolidBrush(bg_color));
-            wpanic_ifeq!(FillRect(hdc, &ps.rcPaint, bg_brush), 0);
-            wpanic_ifeq!(DeleteObject(bg_brush as _), FALSE);
+            unsafe {
+                self.d2d_brush().SetColor(&bg_color);
+
+                let brushptr = self.d2d_brush() as *mut _ as *mut ID2D1Brush;
+
+                let target = self.d2d_render_target();
+                target.BeginDraw();
+                target.Clear(null_mut());
+
+                let size = target.GetSize();
+
+                target.FillRectangle(
+                    &D2D1_RECT_F {
+                        left: 0.0,
+                        top: 0.0,
+                        right: size.width,
+                        bottom: size.height,
+                    },
+                    brushptr,
+                );
+
+                target.EndDraw(null_mut(), null_mut());
+            }
         }
 
         if let Some(cb) = self.paint_last_cb.as_ref() {
             cb(self, hdc);
         }
 
-        // wpanic_ifnull!(SelectObject(hdc, o_brush));
-        wpanic_ifnull!(SelectObject(hdc, o_pen));
         wpanic_ifeq!(EndPaint(self.hwnd, &ps), FALSE);
     }
 
     fn handle_message(&mut self, message: UINT, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         match message {
+            WM_SIZE => {
+                let rect = self.get_client_rect();
+                let size = D2D1_SIZE_U {
+                    width: rect.right as _,
+                    height: rect.bottom as _,
+                };
+                wpanic_ifne!(self.d2d_render_target().Resize(&size), 0);
+            }
+            WM_ERASEBKGND => {
+                return 1;
+            }
             WM_PAINT => {
                 self.paint();
             }
@@ -319,6 +424,19 @@ impl Button {
 
         unsafe { DefWindowProcW(self.hwnd, message, wparam, lparam) }
     }
+}
+
+pub struct ToggleButton {
+    hwnd: HWND,
+    state: State,
+    track_mouse_leave: bool,
+    is_down: bool,
+    click_cb: Option<CbFn<Self>>,
+    paint_cb: Option<CbFn2<Self, HDC>>,
+    paint_last_cb: Option<CbFn2<Self, HDC>>,
+    is_toggled: bool,
+    colors: Colors,
+    toggled_colors: Colors,
 }
 
 impl Drop for ToggleButton {
@@ -420,14 +538,14 @@ impl ToggleButton {
             paint_last_cb: None,
             is_toggled: false,
             colors: colors.unwrap_or(Colors {
-                default: RGB(100, 100, 100),
-                hover: RGB(80, 80, 80),
-                down: RGB(60, 60, 60),
+                default: wutils::color_from_argb(0xff646464),
+                hover: wutils::color_from_argb(0xff505050),
+                down: wutils::color_from_argb(0xff3c3c3c),
             }),
             toggled_colors: toggled_colors.unwrap_or(Colors {
-                default: RGB(70, 70, 70),
-                hover: RGB(60, 60, 60),
-                down: RGB(50, 50, 50),
+                default: wutils::color_from_argb(0xff464646),
+                hover: wutils::color_from_argb(0xff3c3c3c),
+                down: wutils::color_from_argb(0xff323232),
             }),
         });
 
@@ -488,7 +606,7 @@ impl ToggleButton {
                 State::Down => colors.down,
             };
 
-            let bg_brush = wpanic_ifnull!(CreateSolidBrush(bg_color));
+            let bg_brush = wpanic_ifnull!(CreateSolidBrush(wutils::color_to_colorref(bg_color)));
             wpanic_ifeq!(FillRect(hdc, &ps.rcPaint, bg_brush), 0);
             wpanic_ifeq!(DeleteObject(bg_brush as _), FALSE);
         }

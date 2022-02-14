@@ -7,6 +7,7 @@ use std::os::windows::prelude::OsStrExt;
 use std::ptr::null_mut;
 use std::sync::{Mutex, Once};
 
+use winapi::shared::d3d9types::{D3DCOLORVALUE, D3DCOLOR_COLORVALUE};
 use winapi::shared::minwindef::*;
 use winapi::shared::windef::*;
 use winapi::shared::winerror::{HRESULT, S_OK};
@@ -255,6 +256,27 @@ pub fn center_rect_in_rect(to_center: &mut RECT, outer_rect: &RECT) {
     to_center.bottom = to_center.top + to_height;
 }
 
+pub fn color_from_argb(color: u32) -> D3DCOLORVALUE {
+    D3DCOLORVALUE {
+        a: ((color >> 24) & 0xff) as f32 / 255.0,
+        r: ((color >> 16) & 0xff) as f32 / 255.0,
+        g: ((color >> 8) & 0xff) as f32 / 255.0,
+        b: (color & 0xff) as f32 / 255.0,
+    }
+}
+pub fn color_from_colorref(color: COLORREF) -> D3DCOLORVALUE {
+    D3DCOLORVALUE {
+        a: 1.0,
+        r: (color & 0xff) as f32 / 255.0,
+        g: ((color >> 8) & 0xff) as f32 / 255.0,
+        b: ((color >> 16) & 0xff) as f32 / 255.0,
+    }
+}
+pub fn color_to_colorref(color: D3DCOLORVALUE) -> COLORREF {
+    let D3DCOLORVALUE { r, g, b, .. } = color;
+    ((r * 255f32) as u32) | (((g * 255f32) as u32) << 8) | (((b * 255f32) as u32) << 16)
+}
+
 #[macro_export]
 macro_rules! wpanic_ifeq {
     ( $code:expr, $compared:expr ) => {{
@@ -267,10 +289,21 @@ macro_rules! wpanic_ifeq {
 }
 
 #[macro_export]
+macro_rules! wpanic_ifne {
+    ( $code:expr, $compared:expr ) => {{
+        let res = unsafe { $code };
+        if res != $compared {
+            std::panic::panic_any(io::Error::last_os_error());
+        }
+        res
+    }};
+}
+
+#[macro_export]
 macro_rules! wpanic_ifnull {
     ( $code:expr ) => {{
         let res = unsafe { $code };
-        if res as LPVOID == winapi::shared::ntdef::NULL {
+        if res as winapi::shared::minwindef::LPVOID == winapi::shared::ntdef::NULL {
             std::panic::panic_any(io::Error::last_os_error());
         }
         res
