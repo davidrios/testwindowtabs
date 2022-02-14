@@ -4,7 +4,7 @@ use std::ffi::OsStr;
 use std::io;
 use std::mem::MaybeUninit;
 use std::os::windows::prelude::OsStrExt;
-use std::ptr::null_mut;
+use std::ptr::{null, null_mut};
 use std::sync::{Mutex, Once};
 
 use winapi::shared::d3d9types::{D3DCOLORVALUE, D3DCOLOR_COLORVALUE};
@@ -23,17 +23,20 @@ pub const WP_CAPTION: i32 = 1;
 pub const TOP_AND_BOTTOM_BORDERS: i32 = 2;
 pub const FAKE_SHADOW_HEIGHT: i32 = 1;
 
+type WndProc = unsafe extern "system" fn(
+    hwnd: winapi::shared::windef::HWND,
+    message: winapi::shared::minwindef::UINT,
+    wparam: winapi::shared::minwindef::WPARAM,
+    lparam: winapi::shared::minwindef::LPARAM,
+) -> winapi::shared::minwindef::LRESULT;
+
 #[derive(Debug)]
 pub enum Error {
     Generic(String),
     WindowsInternal(io::Error),
     Hresult(HRESULT),
+    ComponentRegistryError,
     ComponentAlreadyRegistered,
-}
-
-pub trait Component {
-    fn hwnd(&self) -> HWND;
-    fn register_class(h_inst: HINSTANCE) -> Result<(), Error>;
 }
 
 #[derive(Debug)]
@@ -55,7 +58,11 @@ impl ComponentRegistry {
     }
 
     pub fn set_registered(&self, h_inst: isize, class_name: &'static str) -> Result<(), Error> {
-        let mut guard = self.registry.lock().unwrap();
+        let mut guard = match self.registry.lock() {
+            Ok(ok) => ok,
+            Err(_) => return Err(Error::ComponentRegistryError),
+        };
+
         let registry = guard.borrow_mut();
         if !registry.contains_key(&h_inst) {
             registry.insert(h_inst, HashMap::with_capacity(10));
@@ -82,6 +89,37 @@ pub fn component_registry() -> &'static ComponentRegistry {
         });
 
         SINGLETON.assume_init_ref()
+    }
+}
+
+pub fn register_class(
+    h_inst: HINSTANCE,
+    class_name: &'static str,
+    wnd_proc: WndProc,
+) -> Result<(), Error> {
+    match component_registry().set_registered(h_inst as isize, class_name) {
+        Ok(_) => {
+            let class = WNDCLASSW {
+                style: CS_HREDRAW | CS_VREDRAW | CS_OWNDC,
+                lpfnWndProc: Some(wnd_proc),
+                cbClsExtra: 0,
+                cbWndExtra: 0,
+                hInstance: h_inst,
+                hIcon: null_mut(),
+                hCursor: unsafe { LoadCursorW(null_mut(), IDC_ARROW) },
+                hbrBackground: null_mut(),
+                lpszMenuName: null(),
+                lpszClassName: wide_string(class_name).as_ptr(),
+            };
+
+            if unsafe { RegisterClassW(&class) } == 0 {
+                Err(Error::WindowsInternal(io::Error::last_os_error()))
+            } else {
+                Ok(())
+            }
+        }
+        Err(Error::ComponentAlreadyRegistered) => Ok(()),
+        Err(err) => Err(err),
     }
 }
 
@@ -121,25 +159,6 @@ pub fn get_system_metrics_for_dpi(n_index: i32, dpi: u32) -> Result<i32, Error> 
         return Err(Error::WindowsInternal(io::Error::last_os_error()));
     }
     Ok(res)
-}
-
-pub fn with_theme(
-    handle: HWND,
-    exec: Box<dyn Fn(HTHEME) -> Result<(), Error>>,
-) -> Result<(), Error> {
-    let theme = unsafe { OpenThemeData(handle, wide_string("WINDOW").as_ptr()) };
-    if theme.is_null() {
-        return Err(Error::WindowsInternal(io::Error::last_os_error()));
-    }
-
-    exec(theme)?;
-
-    let res = unsafe { CloseThemeData(theme) };
-    if res != S_OK {
-        return Err(Error::Hresult(res));
-    }
-
-    Ok(())
 }
 
 pub fn get_titlebar_rect(handle: HWND) -> Result<RECT, Error> {
@@ -243,6 +262,21 @@ pub fn window_is_maximized(handle: HWND) -> Result<bool, Error> {
     Ok(placement.showCmd == SW_SHOWMAXIMIZED as _)
 }
 
+pub fn is_mouse_over(handle: HWND) -> Result<bool, Error> {
+    let mut cursor_point = POINT::default();
+    if unsafe { GetCursorPos(&mut cursor_point) } != TRUE {
+        return Err(Error::WindowsInternal(io::Error::last_os_error()));
+    }
+
+    if unsafe { ScreenToClient(handle, &mut cursor_point) } != TRUE {
+        return Err(Error::WindowsInternal(io::Error::last_os_error()));
+    }
+
+    let rect = get_client_rect(handle)?;
+
+    Ok(unsafe { PtInRect(&rect, cursor_point) } == TRUE)
+}
+
 pub fn center_rect_in_rect(to_center: &mut RECT, outer_rect: &RECT) {
     let to_width = to_center.right - to_center.left;
     let to_height = to_center.bottom - to_center.top;
@@ -275,87 +309,4 @@ pub fn color_from_colorref(color: COLORREF) -> D3DCOLORVALUE {
 pub fn color_to_colorref(color: D3DCOLORVALUE) -> COLORREF {
     let D3DCOLORVALUE { r, g, b, .. } = color;
     ((r * 255f32) as u32) | (((g * 255f32) as u32) << 8) | (((b * 255f32) as u32) << 16)
-}
-
-#[macro_export]
-macro_rules! wpanic_ifeq {
-    ( $code:expr, $compared:expr ) => {{
-        let res = unsafe { $code };
-        if res == $compared {
-            std::panic::panic_any(io::Error::last_os_error());
-        }
-        res
-    }};
-}
-
-#[macro_export]
-macro_rules! wpanic_ifne {
-    ( $code:expr, $compared:expr ) => {{
-        let res = unsafe { $code };
-        if res != $compared {
-            std::panic::panic_any(io::Error::last_os_error());
-        }
-        res
-    }};
-}
-
-#[macro_export]
-macro_rules! wpanic_ifnull {
-    ( $code:expr ) => {{
-        let res = unsafe { $code };
-        if res as winapi::shared::minwindef::LPVOID == winapi::shared::ntdef::NULL {
-            std::panic::panic_any(io::Error::last_os_error());
-        }
-        res
-    }};
-}
-
-#[macro_export]
-macro_rules! wpanic_ifisnull {
-    ( $code:expr ) => {{
-        let res = unsafe { $code };
-        if res.is_null() {
-            std::panic::panic_any(io::Error::last_os_error());
-        }
-        res
-    }};
-}
-
-#[macro_export]
-macro_rules! wnd_proc_gen {
-    ( $component_class:ident, $fn_name:ident ) => {
-        extern "system" fn $fn_name(
-            hwnd: winapi::shared::windef::HWND,
-            message: winapi::shared::minwindef::UINT,
-            wparam: winapi::shared::minwindef::WPARAM,
-            lparam: winapi::shared::minwindef::LPARAM,
-        ) -> winapi::shared::minwindef::LRESULT {
-            let component;
-
-            if message == winapi::um::winuser::WM_NCCREATE
-                || message == winapi::um::winuser::WM_CREATE
-            {
-                let cs = lparam as *const winapi::um::winuser::CREATESTRUCTW;
-                unsafe {
-                    component = (*cs).lpCreateParams as *mut $component_class;
-                    (*component).hwnd = hwnd;
-                    winapi::um::winuser::SetWindowLongPtrW(
-                        hwnd,
-                        winapi::um::winuser::GWLP_USERDATA,
-                        component as _,
-                    );
-                }
-            } else {
-                component = unsafe {
-                    winapi::um::winuser::GetWindowLongPtrW(hwnd, winapi::um::winuser::GWLP_USERDATA)
-                } as *mut $component_class;
-            }
-
-            if let Some(component) = unsafe { component.as_mut() } {
-                return component.handle_message(message, wparam, lparam);
-            }
-
-            unsafe { winapi::um::winuser::DefWindowProcW(hwnd, message, wparam, lparam) }
-        }
-    };
 }

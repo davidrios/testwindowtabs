@@ -2,6 +2,8 @@
 
 mod button;
 // mod tab_bar;
+mod component;
+mod macros;
 mod wutils;
 
 use std::borrow::BorrowMut;
@@ -26,8 +28,9 @@ use winapi::Interface;
 use crate::button::{
     BaseButton, Button, Colors as ButtonColors, State as ButtonState, ToggleButton,
 };
+use crate::component::Component;
 // use crate::tab_bar::TabBar;
-use crate::wutils::Component;
+use crate::wutils::Error;
 
 const WINDOW_CLASS_NAME: &str = "testwindowtabs.Window";
 const WINDOW_TITLE: &str = "the testwindowtabs application";
@@ -51,28 +54,13 @@ pub struct Window<'a> {
 }
 
 impl<'a> Window<'a> {
-    pub fn register_class(h_inst: HINSTANCE) {
-        if let Ok(_) =
-            wutils::component_registry().set_registered(h_inst as isize, WINDOW_CLASS_NAME)
-        {
-            let class = WNDCLASSW {
-                style: CS_HREDRAW | CS_VREDRAW | CS_OWNDC,
-                lpfnWndProc: Some(wnd_proc),
-                cbClsExtra: 0,
-                cbWndExtra: 0,
-                hInstance: h_inst,
-                hIcon: null_mut(),
-                hCursor: unsafe { LoadCursorW(null_mut(), IDC_ARROW) },
-                hbrBackground: null_mut(),
-                lpszMenuName: null(),
-                lpszClassName: wutils::wide_string(WINDOW_CLASS_NAME).as_ptr(),
-            };
-
-            wpanic_ifeq!(RegisterClassW(&class), 0);
-        }
+    pub fn register_class(h_inst: HINSTANCE) -> Result<(), Error> {
+        wutils::register_class(h_inst, WINDOW_CLASS_NAME, wnd_proc)
     }
 
-    pub fn new(parent_hwnd: HWND, h_inst: HINSTANCE) -> Box<Self> {
+    pub fn new(parent_hwnd: HWND, h_inst: HINSTANCE) -> Result<Box<Self>, Error> {
+        Self::register_class(h_inst)?;
+
         let mut d2d_factory = MaybeUninit::<*mut ID2D1Factory>::uninit();
         wpanic_ifne!(
             D2D1CreateFactory(
@@ -83,8 +71,6 @@ impl<'a> Window<'a> {
             ),
             0
         );
-
-        Self::register_class(h_inst);
 
         let me = Box::new(Self {
             hwnd: null_mut(),
@@ -120,7 +106,7 @@ impl<'a> Window<'a> {
             me.as_ref() as *const _ as _
         ));
 
-        me
+        Ok(me)
     }
 
     fn on_created(&mut self) {
@@ -655,7 +641,7 @@ fn main() {
 
     let h_inst = wpanic_ifisnull!(GetModuleHandleW(null()));
 
-    let window = Window::new(null_mut(), h_inst);
+    let window = Window::new(null_mut(), h_inst).unwrap();
 
     unsafe {
         CreateWindowExW(

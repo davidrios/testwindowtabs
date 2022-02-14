@@ -22,7 +22,8 @@ use winapi::um::winuser::{
 };
 use winapi::Interface;
 
-use crate::wutils::{Component, Error};
+use crate::component::Component;
+use crate::wutils::Error;
 use crate::{wnd_proc_gen, wpanic_ifeq, wpanic_ifne, wpanic_ifnull, wutils};
 
 const BUTTON_CLASS: &str = "CUSTOM_BTN";
@@ -69,15 +70,9 @@ impl Colors {
 pub trait BaseButton: Component {
     fn state(&self) -> State;
     fn colors(&self) -> &Colors;
-    fn is_mouse_over(&self) -> bool;
-    fn get_client_rect(&self) -> RECT;
     fn on_click(&mut self, cb: CbFn<Self>);
     fn on_paint(&mut self, cb: CbFn2<Self, HDC>);
     fn on_paint_last(&mut self, cb: CbFn2<Self, HDC>);
-
-    fn invalidate_rect(&self) {
-        wpanic_ifeq!(InvalidateRect(self.hwnd(), null(), FALSE), FALSE);
-    }
 }
 
 pub struct Button<'a> {
@@ -117,26 +112,7 @@ impl Component for Button<'_> {
     }
 
     fn register_class(h_inst: HINSTANCE) -> Result<(), Error> {
-        if let Ok(_) = wutils::component_registry().set_registered(h_inst as isize, BUTTON_CLASS) {
-            let class = WNDCLASSW {
-                style: CS_HREDRAW | CS_VREDRAW | CS_OWNDC,
-                lpfnWndProc: Some(wnd_proc_btn),
-                cbClsExtra: 0,
-                cbWndExtra: 0,
-                hInstance: h_inst,
-                hIcon: null_mut(),
-                hCursor: unsafe { LoadCursorW(null_mut(), IDC_ARROW) },
-                hbrBackground: null_mut(),
-                lpszMenuName: null(),
-                lpszClassName: wutils::wide_string(BUTTON_CLASS).as_ptr(),
-            };
-
-            if unsafe { RegisterClassW(&class) } == 0 {
-                return Err(Error::WindowsInternal(io::Error::last_os_error()));
-            }
-        }
-
-        Ok(())
+        wutils::register_class(h_inst, BUTTON_CLASS, wnd_proc_btn)
     }
 }
 
@@ -147,21 +123,6 @@ impl BaseButton for Button<'_> {
 
     fn colors(&self) -> &Colors {
         &self.colors
-    }
-
-    fn is_mouse_over(&self) -> bool {
-        let mut cursor_point = POINT::default();
-        wpanic_ifeq!(GetCursorPos(&mut cursor_point), FALSE);
-
-        wpanic_ifeq!(ScreenToClient(self.hwnd, &mut cursor_point), FALSE);
-
-        let rect = self.get_client_rect();
-
-        unsafe { PtInRect(&rect, cursor_point) == TRUE }
-    }
-
-    fn get_client_rect(&self) -> RECT {
-        wutils::get_client_rect(self.hwnd).unwrap()
     }
 
     fn on_click(&mut self, cb: CbFn<Self>) {
@@ -453,28 +414,7 @@ impl Component for ToggleButton {
     }
 
     fn register_class(h_inst: HINSTANCE) -> Result<(), Error> {
-        if let Ok(_) =
-            wutils::component_registry().set_registered(h_inst as isize, TOGGLE_BUTTON_CLASS)
-        {
-            let class = WNDCLASSW {
-                style: CS_HREDRAW | CS_VREDRAW | CS_OWNDC,
-                lpfnWndProc: Some(wnd_proc_tbtn),
-                cbClsExtra: 0,
-                cbWndExtra: 0,
-                hInstance: h_inst,
-                hIcon: null_mut(),
-                hCursor: unsafe { LoadCursorW(null_mut(), IDC_ARROW) },
-                hbrBackground: null_mut(),
-                lpszMenuName: null(),
-                lpszClassName: wutils::wide_string(TOGGLE_BUTTON_CLASS).as_ptr(),
-            };
-
-            if unsafe { RegisterClassW(&class) } == 0 {
-                return Err(Error::WindowsInternal(io::Error::last_os_error()));
-            }
-        }
-
-        Ok(())
+        wutils::register_class(h_inst, TOGGLE_BUTTON_CLASS, wnd_proc_tbtn)
     }
 }
 
@@ -485,21 +425,6 @@ impl BaseButton for ToggleButton {
 
     fn colors(&self) -> &Colors {
         &self.colors
-    }
-
-    fn is_mouse_over(&self) -> bool {
-        let mut cursor_point = POINT::default();
-        wpanic_ifeq!(GetCursorPos(&mut cursor_point), FALSE);
-
-        wpanic_ifeq!(ScreenToClient(self.hwnd, &mut cursor_point), FALSE);
-
-        let rect = self.get_client_rect();
-
-        unsafe { PtInRect(&rect, cursor_point) == TRUE }
-    }
-
-    fn get_client_rect(&self) -> RECT {
-        wutils::get_client_rect(self.hwnd).unwrap()
     }
 
     fn on_click(&mut self, cb: CbFn<Self>) {
