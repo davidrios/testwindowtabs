@@ -4,7 +4,7 @@ use std::{io, mem};
 
 use winapi::shared::d3d9types::D3DCOLORVALUE;
 use winapi::shared::minwindef::{FALSE, HINSTANCE, LPARAM, LRESULT, TRUE, UINT, WPARAM};
-use winapi::shared::windef::{HDC, HWND};
+use winapi::shared::windef::HWND;
 use winapi::um::d2d1::{
     ID2D1Factory, ID2D1HwndRenderTarget, ID2D1SolidColorBrush, D2D1_BRUSH_PROPERTIES, D2D1_COLOR_F,
     D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_RECT_F, D2D1_RENDER_TARGET_PROPERTIES, D2D1_SIZE_U,
@@ -27,7 +27,6 @@ const CM_CLICK: UINT = WM_USER + 1;
 const CM_PAINTLAST: UINT = WM_USER + 2;
 
 type CbFn<T> = Box<dyn Fn(&T)>;
-type CbFn2<T, U> = Box<dyn Fn(&T, U)>;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum State {
@@ -68,8 +67,8 @@ pub trait BaseButton: Component {
     fn state(&self) -> State;
     fn colors(&self) -> &Colors;
     fn on_click(&mut self, cb: CbFn<Self>);
-    fn on_paint(&mut self, cb: CbFn2<Self, HDC>);
-    fn on_paint_last(&mut self, cb: CbFn2<Self, HDC>);
+    fn on_paint(&mut self, cb: CbFn<Self>);
+    fn on_paint_last(&mut self, cb: CbFn<Self>);
 }
 
 pub struct Button<'a> {
@@ -82,8 +81,8 @@ pub struct Button<'a> {
     track_mouse_leave: bool,
     is_down: bool,
     click_cb: Option<CbFn<Self>>,
-    paint_cb: Option<CbFn2<Self, HDC>>,
-    paint_last_cb: Option<CbFn2<Self, HDC>>,
+    paint_cb: Option<CbFn<Self>>,
+    paint_last_cb: Option<CbFn<Self>>,
     colors: Colors,
 }
 
@@ -138,11 +137,11 @@ impl BaseButton for Button<'_> {
         self.click_cb = Some(cb);
     }
 
-    fn on_paint(&mut self, cb: CbFn2<Self, HDC>) {
+    fn on_paint(&mut self, cb: CbFn<Self>) {
         self.paint_cb = Some(cb);
     }
 
-    fn on_paint_last(&mut self, cb: CbFn2<Self, HDC>) {
+    fn on_paint_last(&mut self, cb: CbFn<Self>) {
         self.paint_last_cb = Some(cb);
     }
 }
@@ -281,7 +280,7 @@ impl<'a> Button<'a> {
         }
 
         if let Some(cb) = self.paint_cb.as_ref() {
-            cb(self, hdc);
+            cb(self);
         } else {
             let bg_color = match self.state {
                 State::None => self.colors.default,
@@ -309,7 +308,7 @@ impl<'a> Button<'a> {
         }
 
         if let Some(cb) = self.paint_last_cb.as_ref() {
-            cb(self, hdc);
+            cb(self);
         }
 
         unsafe {
@@ -415,8 +414,8 @@ pub struct ToggleButton<'a> {
     button: Option<Box<Button<'a>>>,
     state: State,
     click_cb: Option<CbFn<Self>>,
-    paint_cb: Option<CbFn2<Self, HDC>>,
-    paint_last_cb: Option<CbFn2<Self, HDC>>,
+    paint_cb: Option<CbFn<Self>>,
+    paint_last_cb: Option<CbFn<Self>>,
     is_toggled: bool,
     colors: Colors,
     toggled_colors: Colors,
@@ -462,11 +461,11 @@ impl BaseButton for ToggleButton<'_> {
         self.click_cb = Some(cb);
     }
 
-    fn on_paint(&mut self, cb: CbFn2<Self, HDC>) {
+    fn on_paint(&mut self, cb: CbFn<Self>) {
         self.paint_cb = Some(cb);
     }
 
-    fn on_paint_last(&mut self, cb: CbFn2<Self, HDC>) {
+    fn on_paint_last(&mut self, cb: CbFn<Self>) {
         self.paint_last_cb = Some(cb);
     }
 }
@@ -581,8 +580,8 @@ impl<'a> ToggleButton<'a> {
             SendMessageW(hwnd, CM_CLICK, 0, 0);
         }));
 
-        button.on_paint_last(Box::new(move |_, hdc| unsafe {
-            SendMessageW(hwnd, CM_PAINTLAST, 0, hdc as _);
+        button.on_paint_last(Box::new(move |_| unsafe {
+            SendMessageW(hwnd, CM_PAINTLAST, 0, 0);
         }));
 
         self.button = Some(button);
@@ -645,7 +644,7 @@ impl<'a> ToggleButton<'a> {
             }
             CM_PAINTLAST => {
                 if let Some(cb) = self.paint_last_cb.as_ref() {
-                    cb(self, lparam as _);
+                    cb(self);
                 }
             }
             _ => {}
