@@ -208,10 +208,16 @@ impl<'a> Window<'a> {
             let title_bar_item_color = wutils::color_from_colorref(title_bar_item_color);
 
             let target = button.d2d_render_target();
-            let size = unsafe { target.GetSize() };
+            let size = unsafe {
+                target.SetAntialiasMode(1);
+                target.SetDpi(96.0, 96.0);
+                target.GetSize()
+            };
 
+            let dpi = wutils::get_dpi_for_window(hwnd).unwrap();
+            let icon_dimension = wutils::dpi_scale(ICON_DIMENSION, dpi);
             let mut icon_rect = D2D1_RECT_F {
-                right: ICON_DIMENSION as _,
+                right: icon_dimension as _,
                 bottom: 1.0,
                 ..Default::default()
             };
@@ -264,11 +270,19 @@ impl<'a> Window<'a> {
             };
 
             let target = button.d2d_render_target();
-            let size = unsafe { target.GetSize() };
+
+            let size = unsafe {
+                target.SetAntialiasMode(1);
+                target.SetDpi(96.0, 96.0);
+                target.GetSize()
+            };
+
+            let dpi = wutils::get_dpi_for_window(hwnd).unwrap();
+            let icon_dimension = wutils::dpi_scale(ICON_DIMENSION, dpi);
 
             let mut icon_rect = D2D1_RECT_F {
-                right: ICON_DIMENSION as _,
-                bottom: ICON_DIMENSION as _,
+                right: icon_dimension as _,
+                bottom: icon_dimension as _,
                 ..Default::default()
             };
             wutils::center_d2drect_in_rect(
@@ -359,11 +373,16 @@ impl<'a> Window<'a> {
             let title_bar_item_color = wutils::color_from_colorref(title_bar_item_color);
 
             let target = button.d2d_render_target();
-            let size = unsafe { target.GetSize() };
+            let size = unsafe {
+                target.SetDpi(96.0, 96.0);
+                target.GetSize()
+            };
 
+            let dpi = wutils::get_dpi_for_window(hwnd).unwrap();
+            let icon_dimension = wutils::dpi_scale(ICON_DIMENSION, dpi);
             let mut icon_rect = D2D1_RECT_F {
-                right: ICON_DIMENSION as _,
-                bottom: ICON_DIMENSION as _,
+                right: icon_dimension as _,
+                bottom: icon_dimension as _,
                 ..Default::default()
             };
             wutils::center_d2drect_in_rect(
@@ -396,7 +415,7 @@ impl<'a> Window<'a> {
                         y: icon_rect.bottom,
                     },
                     brush as *const _ as _,
-                    1.0,
+                    1.2,
                     null_mut(),
                 );
 
@@ -410,7 +429,7 @@ impl<'a> Window<'a> {
                         y: icon_rect.top,
                     },
                     brush as *const _ as _,
-                    1.0,
+                    1.2,
                     null_mut(),
                 );
             }
