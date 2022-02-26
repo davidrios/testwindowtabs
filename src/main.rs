@@ -44,6 +44,7 @@ const ICON_DIMENSION: i32 = 9;
 pub struct Window<'a> {
     hwnd: HWND,
     h_inst: HINSTANCE,
+    is_down: bool,
     minimize_button: Option<Box<Button<'a>>>,
     maximize_button: Option<Box<Button<'a>>>,
     close_button: Option<Box<Button<'a>>>,
@@ -64,6 +65,7 @@ impl<'a> Window<'a> {
         let me = Box::new(Self {
             hwnd: null_mut(),
             h_inst,
+            is_down: false,
             minimize_button: None,
             maximize_button: None,
             close_button: None,
@@ -573,16 +575,54 @@ impl<'a> Window<'a> {
                     y: cursor_point.y as i32,
                 };
                 wpanic_ifeq!(ScreenToClient(self.hwnd, &mut cursor_point), FALSE);
+
+                // check if in resize area
                 if cursor_point.y > 0 && cursor_point.y < frame_y + padding {
                     return HTTOP;
                 }
 
-                // Since we are drawing our own caption, this needs to be a custom test
+                // check if in window title area
                 if cursor_point.y < wutils::get_titlebar_rect(self.hwnd).unwrap().bottom {
                     return HTCAPTION;
                 }
 
                 return HTCLIENT;
+            }
+            WM_NCRBUTTONDOWN => {
+                self.is_down = true;
+                unsafe { SetCapture(self.hwnd) };
+                return 1;
+            }
+            WM_RBUTTONUP if self.is_down => {
+                let title_rect = wutils::get_titlebar_rect(self.hwnd).unwrap();
+                let cursor_point = MAKEPOINTS(lparam as u32);
+                let mut cursor_point = POINT {
+                    x: cursor_point.x as i32,
+                    y: cursor_point.y as i32,
+                };
+                let in_area = unsafe { PtInRect(&title_rect, cursor_point) > 0 };
+
+                if in_area {
+                    wpanic_ifeq!(ClientToScreen(self.hwnd, &mut cursor_point), FALSE);
+
+                    unsafe {
+                        let menu = GetSystemMenu(self.hwnd, 0);
+                        let cmd = TrackPopupMenuEx(
+                            menu,
+                            TPM_RETURNCMD,
+                            cursor_point.x as _,
+                            cursor_point.y as _,
+                            self.hwnd,
+                            null_mut(),
+                        );
+                        if cmd > 0 {
+                            PostMessageW(self.hwnd, WM_SYSCOMMAND, cmd as _, 0);
+                        }
+                    }
+                }
+
+                self.is_down = false;
+                wpanic_ifeq!(ReleaseCapture(), FALSE);
             }
             WM_ERASEBKGND => {
                 return 1;
