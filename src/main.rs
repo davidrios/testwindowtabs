@@ -194,7 +194,7 @@ impl<'a> Window<'a> {
             wpanic_ifeq!(PostMessageW(hwnd, WM_CLOSE, 0, 0), FALSE);
         }));
 
-        minimize_button.on_paint_last(Box::new(move |button, _| {
+        minimize_button.on_paint_last(Box::new(move |button| {
             let has_focus = !unsafe { GetFocus() }.is_null();
 
             let title_bar_item_color = if has_focus || button.is_mouse_over() {
@@ -249,7 +249,7 @@ impl<'a> Window<'a> {
             }
         }));
 
-        maximize_button.on_paint_last(Box::new(move |button, _| {
+        maximize_button.on_paint_last(Box::new(move |button| {
             let has_focus = !unsafe { GetFocus() }.is_null();
 
             let title_bar_item_color = if has_focus || button.is_mouse_over() {
@@ -359,7 +359,7 @@ impl<'a> Window<'a> {
             }
         }));
 
-        close_button.on_paint_last(Box::new(move |button, _| {
+        close_button.on_paint_last(Box::new(move |button| {
             let has_focus = !unsafe { GetFocus() }.is_null();
 
             let title_bar_item_color = if has_focus {
@@ -816,7 +816,7 @@ fn main() {
     }
 
     let mut _btn = Button::new(window.hwnd, h_inst, 4, 4, 50, 30, None, None).unwrap();
-    _btn.on_paint_last(Box::new(|button, _| {
+    _btn.on_paint_last(Box::new(|button| {
         let target = button.d2d_render_target();
         let brush = button.d2d_brush();
 
@@ -842,6 +842,54 @@ fn main() {
     tbtn.on_click(Box::new(move |button| {
         println!("toggled! current state: {:?}", button.is_toggled());
         wpanic_ifeq!(InvalidateRect(hwnd, null_mut(), FALSE), FALSE);
+    }));
+    tbtn.on_paint_last(Box::new(move |button| {
+        let title_bar_item_color = if button.is_toggled() {
+            0xffff0000
+        } else {
+            0xff00ffff
+        };
+
+        let title_bar_item_color = wutils::color_from_argb(title_bar_item_color);
+
+        let target = button.d2d_render_target();
+        let size = unsafe {
+            target.SetAntialiasMode(1);
+            target.SetDpi(96.0, 96.0);
+            target.GetSize()
+        };
+
+        let dpi = wutils::get_dpi_for_window(hwnd).unwrap();
+        let icon_dimension = wutils::dpi_scale(ICON_DIMENSION, dpi);
+        let mut icon_rect = D2D1_RECT_F {
+            right: icon_dimension as _,
+            bottom: 1.0,
+            ..Default::default()
+        };
+        wutils::center_d2drect_in_rect(
+            &mut icon_rect,
+            &D2D1_RECT_F {
+                right: size.width,
+                bottom: size.height,
+                ..Default::default()
+            },
+        );
+
+        let brush = button.d2d_brush();
+
+        unsafe {
+            brush.SetColor(&title_bar_item_color);
+
+            target.FillRectangle(
+                &D2D1_RECT_F {
+                    left: icon_rect.left,
+                    top: icon_rect.top,
+                    right: icon_rect.right,
+                    bottom: icon_rect.bottom,
+                },
+                brush as *const _ as _,
+            );
+        }
     }));
 
     let mut msg: MSG = unsafe { std::mem::zeroed() };
