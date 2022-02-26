@@ -836,7 +836,8 @@ fn main() {
             );
         }
     }));
-    let mut tbtn = ToggleButton::new(window.hwnd, h_inst, 154, 200, 100, 50, None, None).unwrap();
+    let mut tbtn =
+        ToggleButton::new(window.hwnd, h_inst, 154, 200, 100, 50, None, None, None).unwrap();
     let hwnd = window.hwnd;
     tbtn.on_click(Box::new(move |button| {
         println!("toggled! current state: {:?}", button.is_toggled());

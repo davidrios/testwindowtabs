@@ -1,26 +1,21 @@
-use std::borrow::Borrow;
-use std::cell::RefCell;
 use std::mem::MaybeUninit;
-use std::ptr::{null, null_mut};
+use std::ptr::null_mut;
 use std::{io, mem};
 
 use winapi::shared::d3d9types::D3DCOLORVALUE;
 use winapi::shared::minwindef::{FALSE, HINSTANCE, LPARAM, LRESULT, TRUE, UINT, WPARAM};
-use winapi::shared::windef::{HDC, HWND, POINT, RECT};
+use winapi::shared::windef::{HDC, HWND};
 use winapi::um::d2d1::{
-    D2D1CreateFactory, ID2D1Brush, ID2D1Factory, ID2D1HwndRenderTarget, ID2D1SolidColorBrush,
-    D2D1_BRUSH_PROPERTIES, D2D1_COLOR_F, D2D1_FACTORY_OPTIONS, D2D1_FACTORY_TYPE_SINGLE_THREADED,
+    ID2D1Factory, ID2D1HwndRenderTarget, ID2D1SolidColorBrush, D2D1_BRUSH_PROPERTIES, D2D1_COLOR_F,
     D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_RECT_F, D2D1_RENDER_TARGET_PROPERTIES, D2D1_SIZE_U,
 };
-use winapi::um::wingdi::{CreateSolidBrush, DeleteObject, GetStockObject, SelectObject};
+use winapi::um::wingdi::{CreateSolidBrush, DeleteObject, GetStockObject, SelectObject, RGB};
 use winapi::um::winuser::{
-    BeginPaint, CreateWindowExW, DefWindowProcW, DestroyWindow, EndPaint, FillRect, GetCursorPos,
-    InvalidateRect, LoadCursorW, PtInRect, RegisterClassW, ReleaseCapture, ScreenToClient,
-    SetCapture, TrackMouseEvent, CS_HREDRAW, CS_OWNDC, CS_VREDRAW, IDC_ARROW, MK_LBUTTON,
-    PAINTSTRUCT, TME_LEAVE, TRACKMOUSEEVENT, WM_ERASEBKGND, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSELEAVE, WM_MOUSEMOVE, WM_PAINT, WM_SIZE, WNDCLASSW, WS_CHILD, WS_VISIBLE,
+    BeginPaint, CreateWindowExW, DefWindowProcW, DestroyWindow, EndPaint, FillRect, MoveWindow,
+    ReleaseCapture, SetCapture, TrackMouseEvent, MK_LBUTTON, PAINTSTRUCT, TME_LEAVE,
+    TRACKMOUSEEVENT, WM_CREATE, WM_ERASEBKGND, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSELEAVE,
+    WM_MOUSEMOVE, WM_PAINT, WM_SIZE, WS_CHILD, WS_VISIBLE,
 };
-use winapi::Interface;
 
 use crate::component::Component;
 use crate::wutils::Error;
@@ -92,6 +87,8 @@ pub struct Button<'a> {
 
 impl Drop for Button<'_> {
     fn drop(&mut self) {
+        dbg!(("Drop button", self.hwnd));
+
         if let Some(ref brush) = self.d2d_brush {
             unsafe {
                 brush.Release();
@@ -163,7 +160,7 @@ impl<'a> Button<'a> {
 
         let mut is_own_d2d = false;
 
-        let factory = match d2d_factory {
+        let d2d_factory = match d2d_factory {
             Some(some) => some,
             None => {
                 is_own_d2d = true;
@@ -174,7 +171,7 @@ impl<'a> Button<'a> {
         let mut me = Box::new(Self {
             hwnd: null_mut(),
             is_own_d2d,
-            d2d_factory: factory,
+            d2d_factory,
             d2d_render_target: None,
             d2d_brush: None,
             state: State::None,
@@ -214,6 +211,10 @@ impl<'a> Button<'a> {
         (*me).hwnd = hwnd;
 
         Ok(me)
+    }
+
+    pub fn set_colors(&mut self, colors: &Colors) {
+        self.colors = Colors::new(colors.default, colors.hover, colors.down);
     }
 
     fn init_d2d(&mut self) {
@@ -404,8 +405,12 @@ impl<'a> Button<'a> {
     }
 }
 
-pub struct ToggleButton {
+pub struct ToggleButton<'a> {
     hwnd: HWND,
+    h_inst: HINSTANCE,
+    is_own_d2d: bool,
+    d2d_factory: &'a ID2D1Factory,
+    button: Option<Box<Button<'a>>>,
     state: State,
     track_mouse_leave: bool,
     is_down: bool,
@@ -417,15 +422,24 @@ pub struct ToggleButton {
     toggled_colors: Colors,
 }
 
-impl Drop for ToggleButton {
+impl Drop for ToggleButton<'_> {
     fn drop(&mut self) {
+        self.button = None;
+
+        dbg!(("Drop t button", self.hwnd));
+        if self.is_own_d2d {
+            unsafe {
+                self.d2d_factory.Release();
+            }
+        }
+
         unsafe {
             DestroyWindow(self.hwnd);
         }
     }
 }
 
-impl Component for ToggleButton {
+impl Component for ToggleButton<'_> {
     fn hwnd(&self) -> HWND {
         self.hwnd
     }
@@ -435,7 +449,7 @@ impl Component for ToggleButton {
     }
 }
 
-impl BaseButton for ToggleButton {
+impl BaseButton for ToggleButton<'_> {
     fn state(&self) -> State {
         self.state
     }
@@ -457,7 +471,7 @@ impl BaseButton for ToggleButton {
     }
 }
 
-impl ToggleButton {
+impl<'a> ToggleButton<'a> {
     pub fn new(
         parent_hwnd: HWND,
         h_inst: HINSTANCE,
@@ -467,11 +481,26 @@ impl ToggleButton {
         height: i32,
         colors: Option<Colors>,
         toggled_colors: Option<Colors>,
+        d2d_factory: Option<&'a ID2D1Factory>,
     ) -> Result<Box<Self>, Error> {
         Self::register_class(h_inst)?;
 
+        let mut is_own_d2d = false;
+
+        let d2d_factory = match d2d_factory {
+            Some(some) => some,
+            None => {
+                is_own_d2d = true;
+                wutils::create_d2d_factory()?
+            }
+        };
+
         let mut me = Box::new(Self {
             hwnd: null_mut(),
+            h_inst,
+            is_own_d2d,
+            d2d_factory,
+            button: None,
             state: State::None,
             track_mouse_leave: false,
             is_down: false,
@@ -517,12 +546,64 @@ impl ToggleButton {
         Ok(me)
     }
 
+    fn reposition_components(&self) {
+        let rect = self.get_client_rect();
+
+        if let Some(ref button) = self.button {
+            wpanic_ifeq!(
+                MoveWindow(
+                    button.hwnd(),
+                    rect.left,
+                    rect.top,
+                    rect.right - rect.left - 10,
+                    rect.bottom - rect.top - 10,
+                    TRUE
+                ),
+                0
+            );
+        }
+    }
+
+    fn on_created(&mut self) {
+        let button = Button::new(
+            self.hwnd,
+            self.h_inst,
+            0,
+            0,
+            0,
+            0,
+            None,
+            Some(self.d2d_factory),
+        )
+        .unwrap();
+
+        self.button = Some(button);
+
+        let hwnd = self.hwnd;
+
+        let button = self.button.as_mut().unwrap();
+
+        // button.on_click(Box::new(move |_| {
+        //     if let Some(cb) = self.click_cb.as_ref() {
+        //         cb(self);
+        //     }
+        // }));
+    }
+
     pub fn is_toggled(&self) -> bool {
         self.is_toggled
     }
 
     pub fn toggle(&mut self) -> bool {
         self.is_toggled = !self.is_toggled;
+
+        if let Some(ref mut button) = self.button {
+            if self.is_toggled {
+                button.set_colors(&self.toggled_colors);
+            } else {
+                button.set_colors(&self.colors);
+            }
+        }
         self.invalidate_rect();
         self.is_toggled
     }
@@ -530,25 +611,11 @@ impl ToggleButton {
     fn paint(&mut self) {
         let mut ps = PAINTSTRUCT::default();
         let hdc = wpanic_ifnull!(BeginPaint(self.hwnd, &mut ps));
-        let o_pen = wpanic_ifnull!(SelectObject(hdc, GetStockObject(wutils::DC_PEN)));
-        // let o_brush = wpanic_ifnull!(SelectObject(hdc, GetStockObject(wutils::DC_BRUSH)));
 
         if let Some(cb) = self.paint_cb.as_ref() {
             cb(self, hdc);
         } else {
-            let colors = if self.is_toggled {
-                &self.toggled_colors
-            } else {
-                &self.colors
-            };
-
-            let bg_color = match self.state {
-                State::None => colors.default,
-                State::Hover => colors.hover,
-                State::Down => colors.down,
-            };
-
-            let bg_brush = wpanic_ifnull!(CreateSolidBrush(wutils::color_to_colorref(bg_color)));
+            let bg_brush = wpanic_ifnull!(CreateSolidBrush(RGB(0xff, 0xdd, 0xdd)));
             wpanic_ifeq!(FillRect(hdc, &ps.rcPaint, bg_brush), 0);
             wpanic_ifeq!(DeleteObject(bg_brush as _), FALSE);
         }
@@ -557,8 +624,6 @@ impl ToggleButton {
             cb(self, hdc);
         }
 
-        // wpanic_ifnull!(SelectObject(hdc, o_brush));
-        wpanic_ifnull!(SelectObject(hdc, o_pen));
         wpanic_ifeq!(EndPaint(self.hwnd, &ps), FALSE);
     }
 
@@ -567,70 +632,12 @@ impl ToggleButton {
             WM_PAINT => {
                 self.paint();
             }
-            WM_MOUSELEAVE => {
-                self.track_mouse_leave = false;
-                self.state = State::None;
-                self.invalidate_rect();
+            WM_CREATE => {
+                self.on_created();
+                self.reposition_components();
             }
-            WM_MOUSEMOVE => {
-                let old_state = self.state;
-
-                if !self.track_mouse_leave {
-                    self.track_mouse_leave = true;
-
-                    let mut trk = TRACKMOUSEEVENT {
-                        cbSize: mem::size_of::<TRACKMOUSEEVENT>() as u32,
-                        dwFlags: TME_LEAVE,
-                        hwndTrack: self.hwnd,
-                        dwHoverTime: 0,
-                    };
-
-                    wpanic_ifeq!(TrackMouseEvent(&mut trk), FALSE);
-                }
-
-                if self.is_mouse_over() && self.is_down {
-                    if wparam & MK_LBUTTON > 0 {
-                        self.state = State::Down;
-                    } else {
-                        self.state = State::Hover;
-                    }
-                } else {
-                    self.state = State::Hover;
-                }
-
-                if old_state != self.state {
-                    self.invalidate_rect();
-                }
-            }
-            WM_LBUTTONDOWN => {
-                self.state = State::Down;
-                self.is_down = true;
-                self.invalidate_rect();
-                unsafe { SetCapture(self.hwnd) };
-                return 1;
-            }
-            WM_LBUTTONUP => {
-                let old_state = self.state;
-
-                if self.is_mouse_over() {
-                    self.state = State::Hover;
-
-                    if self.is_down {
-                        self.toggle();
-                        if let Some(cb) = self.click_cb.as_ref() {
-                            cb(self);
-                        }
-                    }
-                } else {
-                    self.state = State::None;
-                }
-
-                self.is_down = false;
-                if old_state != self.state {
-                    self.invalidate_rect();
-                }
-
-                wpanic_ifeq!(ReleaseCapture(), FALSE);
+            WM_SIZE => {
+                self.reposition_components();
             }
             _ => {}
         }
