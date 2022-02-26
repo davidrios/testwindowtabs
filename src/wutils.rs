@@ -13,6 +13,7 @@ use winapi::shared::windef::*;
 use winapi::shared::winerror::{HRESULT, S_OK};
 use winapi::um::d2d1::{
     D2D1CreateFactory, ID2D1Factory, D2D1_FACTORY_OPTIONS, D2D1_FACTORY_TYPE_SINGLE_THREADED,
+    D2D1_RECT_F,
 };
 use winapi::um::uxtheme::*;
 use winapi::um::winuser::*;
@@ -284,6 +285,19 @@ pub fn center_rect_in_rect(to_center: &mut RECT, outer_rect: &RECT) {
     let outer_height = outer_rect.bottom - outer_rect.top;
     let padding_x = (outer_width - to_width) / 2;
     let padding_y = (outer_height - to_height) / 2;
+    to_center.left = outer_rect.left + padding_x;
+    to_center.top = outer_rect.top + padding_y;
+    to_center.right = to_center.left + to_width;
+    to_center.bottom = to_center.top + to_height;
+}
+
+pub fn center_d2drect_in_rect(to_center: &mut D2D1_RECT_F, outer_rect: &D2D1_RECT_F) {
+    let to_width = to_center.right - to_center.left;
+    let to_height = to_center.bottom - to_center.top;
+    let outer_width = outer_rect.right - outer_rect.left;
+    let outer_height = outer_rect.bottom - outer_rect.top;
+    let padding_x = (outer_width - to_width) / 2.0;
+    let padding_y = (outer_height - to_height) / 2.0;
     to_center.left = outer_rect.left + padding_x;
     to_center.top = outer_rect.top + padding_y;
     to_center.right = to_center.left + to_width;

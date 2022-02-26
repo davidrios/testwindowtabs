@@ -39,7 +39,7 @@ const TITLE_HOVER_COLOR: (u8, u8, u8) = (130, 180, 160);
 const TITLE_DOWN_COLOR: (u8, u8, u8) = (120, 167, 148);
 const TITLE_ITEM_COLOR: (u8, u8, u8) = (33, 33, 33);
 const TITLE_ITEM_BLUR_COLOR: (u8, u8, u8) = (127, 127, 127);
-const ICON_DIMENSION: i32 = 10;
+const ICON_DIMENSION: i32 = 9;
 
 pub struct Window<'a> {
     hwnd: HWND,
@@ -192,7 +192,7 @@ impl<'a> Window<'a> {
             wpanic_ifeq!(PostMessageW(hwnd, WM_CLOSE, 0, 0), FALSE);
         }));
 
-        minimize_button.on_paint_last(Box::new(move |button, hdc| {
+        minimize_button.on_paint_last(Box::new(move |button, _| {
             let has_focus = !unsafe { GetFocus() }.is_null();
 
             let title_bar_item_color = if has_focus || button.is_mouse_over() {
@@ -205,20 +205,43 @@ impl<'a> Window<'a> {
                 )
             };
 
-            let button_icon_brush = wpanic_ifnull!(CreateSolidBrush(title_bar_item_color));
+            let title_bar_item_color = wutils::color_from_colorref(title_bar_item_color);
 
-            let dpi = wutils::get_dpi_for_window(hwnd).unwrap();
-            let icon_dimension = wutils::dpi_scale(ICON_DIMENSION, dpi);
-            let mut icon_rect = RECT::default();
-            icon_rect.right = icon_dimension;
-            icon_rect.bottom = 1;
-            wutils::center_rect_in_rect(&mut icon_rect, &button.get_client_rect());
+            let target = button.d2d_render_target();
+            let size = unsafe { target.GetSize() };
 
-            wpanic_ifeq!(FillRect(hdc, &icon_rect, button_icon_brush), 0);
-            wpanic_ifeq!(DeleteObject(button_icon_brush as _), FALSE);
+            let mut icon_rect = D2D1_RECT_F {
+                right: ICON_DIMENSION as _,
+                bottom: 1.0,
+                ..Default::default()
+            };
+            wutils::center_d2drect_in_rect(
+                &mut icon_rect,
+                &D2D1_RECT_F {
+                    right: size.width,
+                    bottom: size.height,
+                    ..Default::default()
+                },
+            );
+
+            let brush = button.d2d_brush();
+
+            unsafe {
+                brush.SetColor(&title_bar_item_color);
+
+                target.FillRectangle(
+                    &D2D1_RECT_F {
+                        left: icon_rect.left,
+                        top: icon_rect.top,
+                        right: icon_rect.right,
+                        bottom: icon_rect.bottom,
+                    },
+                    brush as *const _ as _,
+                );
+            }
         }));
 
-        maximize_button.on_paint_last(Box::new(move |button, hdc| {
+        maximize_button.on_paint_last(Box::new(move |button, _| {
             let has_focus = !unsafe { GetFocus() }.is_null();
 
             let title_bar_item_color = if has_focus || button.is_mouse_over() {
@@ -230,80 +253,97 @@ impl<'a> Window<'a> {
                     TITLE_ITEM_BLUR_COLOR.2,
                 )
             };
+
+            let title_bar_item_color = wutils::color_from_colorref(title_bar_item_color);
 
             let colors = button.colors();
-            match button.state() {
-                ButtonState::None => {
-                    wpanic_ifnull!(SetDCBrushColor(
-                        hdc,
-                        wutils::color_to_colorref(colors.default())
-                    ));
-                }
-                ButtonState::Hover => {
-                    wpanic_ifnull!(SetDCBrushColor(
-                        hdc,
-                        wutils::color_to_colorref(colors.hover())
-                    ));
-                }
-                ButtonState::Down => {
-                    wpanic_ifnull!(SetDCBrushColor(
-                        hdc,
-                        wutils::color_to_colorref(colors.down())
-                    ));
-                }
-            }
+            let bg_color = match button.state() {
+                ButtonState::None => colors.default(),
+                ButtonState::Hover => colors.hover(),
+                ButtonState::Down => colors.down(),
+            };
 
-            let dpi = wutils::get_dpi_for_window(hwnd).unwrap();
-            let icon_dimension = wutils::dpi_scale(ICON_DIMENSION, dpi);
-            let mut icon_rect = RECT::default();
-            icon_rect.right = icon_dimension;
-            icon_rect.bottom = icon_dimension;
-            wutils::center_rect_in_rect(&mut icon_rect, &button.get_client_rect());
+            let target = button.d2d_render_target();
+            let size = unsafe { target.GetSize() };
 
-            let button_icon_pen = wpanic_ifnull!(CreatePen(PS_SOLID as _, 1, title_bar_item_color));
+            let mut icon_rect = D2D1_RECT_F {
+                right: ICON_DIMENSION as _,
+                bottom: ICON_DIMENSION as _,
+                ..Default::default()
+            };
+            wutils::center_d2drect_in_rect(
+                &mut icon_rect,
+                &D2D1_RECT_F {
+                    right: size.width,
+                    bottom: size.height,
+                    ..Default::default()
+                },
+            );
 
-            wpanic_ifnull!(SelectObject(hdc, button_icon_pen as _));
-            wpanic_ifnull!(SelectObject(hdc, GetStockObject(HOLLOW_BRUSH as _)));
+            let brush = button.d2d_brush();
 
             if wutils::window_is_maximized(hwnd).unwrap() {
-                wpanic_ifeq!(
-                    Rectangle(
-                        hdc,
-                        icon_rect.left + 2,
-                        icon_rect.top,
-                        icon_rect.right,
-                        icon_rect.bottom - 2,
-                    ),
-                    FALSE
-                );
-                wpanic_ifnull!(SelectObject(hdc, GetStockObject(DC_BRUSH as _)));
-                wpanic_ifeq!(
-                    Rectangle(
-                        hdc,
-                        icon_rect.left,
-                        icon_rect.top + 2,
-                        icon_rect.right - 2,
-                        icon_rect.bottom,
-                    ),
-                    FALSE
-                );
-            } else {
-                wpanic_ifeq!(
-                    Rectangle(
-                        hdc,
-                        icon_rect.left,
-                        icon_rect.top,
-                        icon_rect.right,
-                        icon_rect.bottom,
-                    ),
-                    FALSE
-                );
-            }
+                unsafe {
+                    brush.SetColor(&title_bar_item_color);
 
-            wpanic_ifeq!(DeleteObject(button_icon_pen as _), FALSE);
+                    target.DrawRectangle(
+                        &D2D1_RECT_F {
+                            left: icon_rect.left + 2.0,
+                            top: icon_rect.top,
+                            right: icon_rect.right,
+                            bottom: icon_rect.bottom - 2.0,
+                        },
+                        brush as *const _ as _,
+                        1.0,
+                        null_mut(),
+                    );
+
+                    brush.SetColor(&bg_color);
+
+                    target.FillRectangle(
+                        &D2D1_RECT_F {
+                            left: icon_rect.left,
+                            top: icon_rect.top + 2.0,
+                            right: icon_rect.right - 2.0,
+                            bottom: icon_rect.bottom,
+                        },
+                        brush as *const _ as _,
+                    );
+
+                    brush.SetColor(&title_bar_item_color);
+
+                    target.DrawRectangle(
+                        &D2D1_RECT_F {
+                            left: icon_rect.left,
+                            top: icon_rect.top + 2.0,
+                            right: icon_rect.right - 2.0,
+                            bottom: icon_rect.bottom,
+                        },
+                        brush as *const _ as _,
+                        1.0,
+                        null_mut(),
+                    );
+                }
+            } else {
+                unsafe {
+                    brush.SetColor(&title_bar_item_color);
+
+                    target.DrawRectangle(
+                        &D2D1_RECT_F {
+                            left: icon_rect.left,
+                            top: icon_rect.top,
+                            right: icon_rect.right,
+                            bottom: icon_rect.bottom,
+                        },
+                        brush as *const _ as _,
+                        1.0,
+                        null_mut(),
+                    );
+                }
+            }
         }));
 
-        close_button.on_paint_last(Box::new(move |button, hdc| {
+        close_button.on_paint_last(Box::new(move |button, _| {
             let has_focus = !unsafe { GetFocus() }.is_null();
 
             let title_bar_item_color = if has_focus {
@@ -316,36 +356,64 @@ impl<'a> Window<'a> {
                 )
             };
 
-            let dpi = wutils::get_dpi_for_window(hwnd).unwrap();
-            let icon_dimension = wutils::dpi_scale(ICON_DIMENSION, dpi);
-            let mut icon_rect = RECT {
-                right: icon_dimension,
-                bottom: icon_dimension,
+            let title_bar_item_color = wutils::color_from_colorref(title_bar_item_color);
+
+            let target = button.d2d_render_target();
+            let size = unsafe { target.GetSize() };
+
+            let mut icon_rect = D2D1_RECT_F {
+                right: ICON_DIMENSION as _,
+                bottom: ICON_DIMENSION as _,
                 ..Default::default()
             };
-            wutils::center_rect_in_rect(&mut icon_rect, &button.get_client_rect());
+            wutils::center_d2drect_in_rect(
+                &mut icon_rect,
+                &D2D1_RECT_F {
+                    right: size.width,
+                    bottom: size.height,
+                    ..Default::default()
+                },
+            );
 
-            let button_icon_pen = if button.state() == ButtonState::None {
-                wpanic_ifnull!(CreatePen(PS_SOLID as _, 1, title_bar_item_color))
+            let button_icon_color = if button.state() == ButtonState::None {
+                title_bar_item_color
             } else {
-                wpanic_ifnull!(CreatePen(PS_SOLID as _, 1, RGB(0xff, 0xff, 0xff)))
+                wutils::color_from_argb(0xffffffff)
             };
 
-            let original = wpanic_ifnull!(SelectObject(hdc, button_icon_pen as _));
+            let brush = button.d2d_brush();
 
-            wpanic_ifeq!(
-                MoveToEx(hdc, icon_rect.left + 1, icon_rect.top + 1, null_mut()),
-                FALSE
-            );
-            wpanic_ifeq!(LineTo(hdc, icon_rect.right, icon_rect.bottom), FALSE);
-            wpanic_ifeq!(
-                MoveToEx(hdc, icon_rect.left + 1, icon_rect.bottom - 1, null_mut()),
-                FALSE
-            );
-            wpanic_ifeq!(LineTo(hdc, icon_rect.right, icon_rect.top), FALSE);
+            unsafe {
+                brush.SetColor(&button_icon_color);
 
-            wpanic_ifnull!(SelectObject(hdc, original));
-            wpanic_ifeq!(DeleteObject(button_icon_pen as _), FALSE);
+                target.DrawLine(
+                    D2D1_POINT_2F {
+                        x: icon_rect.left,
+                        y: icon_rect.top,
+                    },
+                    D2D1_POINT_2F {
+                        x: icon_rect.right,
+                        y: icon_rect.bottom,
+                    },
+                    brush as *const _ as _,
+                    1.0,
+                    null_mut(),
+                );
+
+                target.DrawLine(
+                    D2D1_POINT_2F {
+                        x: icon_rect.left,
+                        y: icon_rect.bottom,
+                    },
+                    D2D1_POINT_2F {
+                        x: icon_rect.right,
+                        y: icon_rect.top,
+                    },
+                    brush as *const _ as _,
+                    1.0,
+                    null_mut(),
+                );
+            }
         }));
     }
 
