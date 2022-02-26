@@ -24,6 +24,7 @@ use crate::{wnd_proc_gen, wpanic_ifeq, wpanic_ifne, wpanic_ifnull, wutils};
 const BUTTON_CLASS: &str = "CUSTOM_BTN";
 const TOGGLE_BUTTON_CLASS: &str = "CUSTOM_TBTN";
 const CM_CLICK: UINT = WM_USER + 1;
+const CM_PAINTLAST: UINT = WM_USER + 2;
 
 type CbFn<T> = Box<dyn Fn(&T)>;
 type CbFn2<T, U> = Box<dyn Fn(&T, U)>;
@@ -580,7 +581,19 @@ impl<'a> ToggleButton<'a> {
             SendMessageW(hwnd, CM_CLICK, 0, 0);
         }));
 
+        button.on_paint_last(Box::new(move |_, hdc| unsafe {
+            SendMessageW(hwnd, CM_PAINTLAST, 0, hdc as _);
+        }));
+
         self.button = Some(button);
+    }
+
+    pub fn d2d_render_target(&self) -> &ID2D1HwndRenderTarget {
+        self.button.as_ref().unwrap().d2d_render_target()
+    }
+
+    pub fn d2d_brush(&self) -> &ID2D1SolidColorBrush {
+        self.button.as_ref().unwrap().d2d_brush()
     }
 
     pub fn is_toggled(&self) -> bool {
@@ -605,17 +618,9 @@ impl<'a> ToggleButton<'a> {
         let mut ps = PAINTSTRUCT::default();
         let hdc = wpanic_ifnull!(BeginPaint(self.hwnd, &mut ps));
 
-        if let Some(cb) = self.paint_cb.as_ref() {
-            cb(self, hdc);
-        } else {
-            let bg_brush = wpanic_ifnull!(CreateSolidBrush(RGB(0xff, 0xdd, 0xdd)));
-            wpanic_ifeq!(FillRect(hdc, &ps.rcPaint, bg_brush), 0);
-            wpanic_ifeq!(DeleteObject(bg_brush as _), FALSE);
-        }
-
-        if let Some(cb) = self.paint_last_cb.as_ref() {
-            cb(self, hdc);
-        }
+        let bg_brush = wpanic_ifnull!(CreateSolidBrush(RGB(0xff, 0xdd, 0xdd)));
+        wpanic_ifeq!(FillRect(hdc, &ps.rcPaint, bg_brush), 0);
+        wpanic_ifeq!(DeleteObject(bg_brush as _), FALSE);
 
         wpanic_ifeq!(EndPaint(self.hwnd, &ps), FALSE);
     }
@@ -636,6 +641,11 @@ impl<'a> ToggleButton<'a> {
                 self.toggle();
                 if let Some(cb) = self.click_cb.as_ref() {
                     cb(self);
+                }
+            }
+            CM_PAINTLAST => {
+                if let Some(cb) = self.paint_last_cb.as_ref() {
+                    cb(self, lparam as _);
                 }
             }
             _ => {}
