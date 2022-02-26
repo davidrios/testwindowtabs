@@ -9,12 +9,12 @@ use winapi::um::d2d1::{
     ID2D1Factory, ID2D1HwndRenderTarget, ID2D1SolidColorBrush, D2D1_BRUSH_PROPERTIES, D2D1_COLOR_F,
     D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_RECT_F, D2D1_RENDER_TARGET_PROPERTIES, D2D1_SIZE_U,
 };
-use winapi::um::wingdi::{CreateSolidBrush, DeleteObject, GetStockObject, SelectObject, RGB};
+use winapi::um::wingdi::{CreateSolidBrush, DeleteObject, RGB};
 use winapi::um::winuser::{
     BeginPaint, CreateWindowExW, DefWindowProcW, DestroyWindow, EndPaint, FillRect, MoveWindow,
-    ReleaseCapture, SetCapture, TrackMouseEvent, MK_LBUTTON, PAINTSTRUCT, TME_LEAVE,
+    ReleaseCapture, SendMessageW, SetCapture, TrackMouseEvent, MK_LBUTTON, PAINTSTRUCT, TME_LEAVE,
     TRACKMOUSEEVENT, WM_CREATE, WM_ERASEBKGND, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSELEAVE,
-    WM_MOUSEMOVE, WM_PAINT, WM_SIZE, WS_CHILD, WS_VISIBLE,
+    WM_MOUSEMOVE, WM_PAINT, WM_SIZE, WM_USER, WS_CHILD, WS_VISIBLE,
 };
 
 use crate::component::Component;
@@ -23,6 +23,7 @@ use crate::{wnd_proc_gen, wpanic_ifeq, wpanic_ifne, wpanic_ifnull, wutils};
 
 const BUTTON_CLASS: &str = "CUSTOM_BTN";
 const TOGGLE_BUTTON_CLASS: &str = "CUSTOM_TBTN";
+const CM_CLICK: UINT = WM_USER + 1;
 
 type CbFn<T> = Box<dyn Fn(&T)>;
 type CbFn2<T, U> = Box<dyn Fn(&T, U)>;
@@ -412,8 +413,6 @@ pub struct ToggleButton<'a> {
     d2d_factory: &'a ID2D1Factory,
     button: Option<Box<Button<'a>>>,
     state: State,
-    track_mouse_leave: bool,
-    is_down: bool,
     click_cb: Option<CbFn<Self>>,
     paint_cb: Option<CbFn2<Self, HDC>>,
     paint_last_cb: Option<CbFn2<Self, HDC>>,
@@ -502,8 +501,6 @@ impl<'a> ToggleButton<'a> {
             d2d_factory,
             button: None,
             state: State::None,
-            track_mouse_leave: false,
-            is_down: false,
             click_cb: None,
             paint_cb: None,
             paint_last_cb: None,
@@ -565,7 +562,7 @@ impl<'a> ToggleButton<'a> {
     }
 
     fn on_created(&mut self) {
-        let button = Button::new(
+        let mut button = Button::new(
             self.hwnd,
             self.h_inst,
             0,
@@ -577,17 +574,13 @@ impl<'a> ToggleButton<'a> {
         )
         .unwrap();
 
-        self.button = Some(button);
-
         let hwnd = self.hwnd;
 
-        let button = self.button.as_mut().unwrap();
+        button.on_click(Box::new(move |_| unsafe {
+            SendMessageW(hwnd, CM_CLICK, 0, 0);
+        }));
 
-        // button.on_click(Box::new(move |_| {
-        //     if let Some(cb) = self.click_cb.as_ref() {
-        //         cb(self);
-        //     }
-        // }));
+        self.button = Some(button);
     }
 
     pub fn is_toggled(&self) -> bool {
@@ -638,6 +631,12 @@ impl<'a> ToggleButton<'a> {
             }
             WM_SIZE => {
                 self.reposition_components();
+            }
+            CM_CLICK => {
+                self.toggle();
+                if let Some(cb) = self.click_cb.as_ref() {
+                    cb(self);
+                }
             }
             _ => {}
         }
